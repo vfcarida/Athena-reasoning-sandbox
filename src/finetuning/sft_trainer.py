@@ -155,8 +155,10 @@ class SFTOrchestrator:
             return ALPACA_NO_INPUT_TEMPLATE.format(**sample)
 
         elif fmt == "chatml":
-            system = sample.get("system", "You are a helpful assistant.")
-            return CHATML_TEMPLATE.format(system=system, **sample)
+            kwargs = sample.copy()
+            if "system" not in kwargs:
+                kwargs["system"] = "You are a helpful assistant."
+            return CHATML_TEMPLATE.format(**kwargs)
 
         elif fmt == "sharegpt":
             # ShareGPT format: multi-turn conversation

@@ -29,7 +29,8 @@ from typing import Any, Optional
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch import autocast
+from torch.cuda.amp import GradScaler
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset
@@ -406,10 +407,17 @@ class ContinuedPretrainer:
                 input_ids = batch["input_ids"].to(self.device)
                 labels = batch["labels"].to(self.device)
 
-                with autocast(device_type=str(self.device), dtype=amp_dtype, enabled=use_amp):
+                # [EDUCATIONAL] Forward pass: Compute the next-token prediction loss
+                # We use torch.autocast to automatically map operations to the appropriate
+                # lower-precision dtype (e.g., bf16) to accelerate training.
+                with autocast(device_type=self.device.type, dtype=amp_dtype, enabled=use_amp):
                     outputs = model(input_ids=input_ids, labels=labels)
+                    # [EDUCATIONAL] Scale loss by accumulation steps so that the accumulated gradient
+                    # matches the scale of the intended batch size.
                     loss = outputs.loss / cfg.gradient_accumulation_steps
 
+                # [EDUCATIONAL] Backward pass: Backpropagate the gradients
+                # Loss scaling is critical for fp16 to avoid underflow of tiny gradients.
                 if cfg.mixed_precision == "fp16":
                     scaler.scale(loss).backward()
                 else:
@@ -487,7 +495,7 @@ class ContinuedPretrainer:
             for batch in loader:
                 input_ids = batch["input_ids"].to(self.device)
                 labels = batch["labels"].to(self.device)
-                with autocast(device_type=str(self.device), dtype=amp_dtype, enabled=use_amp):
+                with autocast(device_type=self.device.type, dtype=amp_dtype, enabled=use_amp):
                     outputs = model(input_ids=input_ids, labels=labels)
                 total_loss += outputs.loss.item()
                 count += 1

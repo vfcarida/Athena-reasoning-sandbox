@@ -29,7 +29,8 @@ from typing import Any, Optional, Union
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch import autocast
+from torch.cuda.amp import GradScaler
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR
 from torch.utils.data import DataLoader, Dataset
@@ -365,12 +366,21 @@ class TransformerFromScratch:
                 input_ids = batch["input_ids"].to(self.device)
                 labels = batch["labels"].to(self.device)
 
-                # Forward pass with optional AMP
-                with autocast(device_type=str(self.device), dtype=amp_dtype, enabled=use_amp):
+                # [EDUCATIONAL] Step 1: Forward Pass with Automatic Mixed Precision (AMP)
+                # We use torch.autocast to automatically cast operations to lower precision (e.g., bfloat16).
+                # This drastically reduces VRAM usage and increases tensor core utilization on modern GPUs,
+                # while keeping the loss in fp32 to prevent underflow.
+                with autocast(device_type=self.device.type, dtype=amp_dtype, enabled=use_amp):
                     outputs = model(input_ids=input_ids, labels=labels)
+                    # [EDUCATIONAL] Step 2: Loss Scaling for Gradient Accumulation
+                    # We divide the loss by the accumulation steps. Mathematically, this ensures that
+                    # when we sum the gradients over multiple backward passes, the expected magnitude
+                    # equals what it would be if we processed the entire accumulated batch at once.
                     loss = outputs.loss / cfg.gradient_accumulation_steps
 
-                # Backward pass
+                # [EDUCATIONAL] Step 3: Backward Pass
+                # If using fp16, we must scale the loss before backprop to prevent gradient underflow
+                # (where tiny gradients vanish to 0 in 16-bit precision).
                 if cfg.mixed_precision == "fp16":
                     scaler.scale(loss).backward()
                 else:
@@ -379,10 +389,11 @@ class TransformerFromScratch:
                 epoch_loss += loss.item() * cfg.gradient_accumulation_steps
                 num_batches += 1
 
-                # Optimizer step (with accumulation)
+                # [EDUCATIONAL] Step 4: Optimizer Step (executed only after accumulating enough gradients)
                 if (batch_idx + 1) % cfg.gradient_accumulation_steps == 0:
                     if cfg.mixed_precision == "fp16":
                         scaler.unscale_(optimizer)
+                        # Gradient clipping prevents exploding gradients, a common issue in deep Transformers
                         nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
                         scaler.step(optimizer)
                         scaler.update()
@@ -390,6 +401,9 @@ class TransformerFromScratch:
                         nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
                         optimizer.step()
 
+                    # [EDUCATIONAL] Step 5: Learning Rate Scheduling
+                    # The Cosine warmup schedule gradually increases LR to prevent early divergence,
+                    # then smoothly decays it to allow fine-grained convergence.
                     scheduler.step()
                     optimizer.zero_grad()
                     global_step += 1
@@ -462,7 +476,7 @@ class TransformerFromScratch:
                 input_ids = batch["input_ids"].to(self.device)
                 labels = batch["labels"].to(self.device)
 
-                with autocast(device_type=str(self.device), dtype=amp_dtype, enabled=use_amp):
+                with autocast(device_type=self.device.type, dtype=amp_dtype, enabled=use_amp):
                     outputs = model(input_ids=input_ids, labels=labels)
 
                 total_loss += outputs.loss.item()
