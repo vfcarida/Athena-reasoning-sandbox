@@ -1,0 +1,85 @@
+# NeuroFusionBench — Evaluation Configuration
+# Agent-Bench scenarios, judge model settings, and metric parameters.
+
+# ---------------------------------------------------------------------------
+# Agent-Bench Scenario Definitions
+# ---------------------------------------------------------------------------
+scenarios:
+  - name: "web_navigation"
+    description: "Navigate a simulated web environment to complete a multi-step task."
+    max_steps: 15
+    tools_available:
+      - "click"
+      - "type_text"
+      - "scroll"
+      - "go_back"
+      - "search"
+    ground_truth_tool_sequence:
+      - "search"
+      - "click"
+      - "scroll"
+      - "click"
+      - "type_text"
+
+  - name: "code_generation"
+    description: "Generate, debug, and test a Python function given a spec."
+    max_steps: 10
+    tools_available:
+      - "write_code"
+      - "run_tests"
+      - "read_file"
+      - "debug"
+      - "submit"
+    ground_truth_tool_sequence:
+      - "read_file"
+      - "write_code"
+      - "run_tests"
+      - "debug"
+      - "write_code"
+      - "run_tests"
+      - "submit"
+
+  - name: "data_analysis"
+    description: "Analyze a CSV dataset and produce summary statistics and a chart."
+    max_steps: 12
+    tools_available:
+      - "load_data"
+      - "query_data"
+      - "compute_stats"
+      - "plot_chart"
+      - "export_report"
+    ground_truth_tool_sequence:
+      - "load_data"
+      - "query_data"
+      - "compute_stats"
+      - "plot_chart"
+      - "export_report"
+
+# ---------------------------------------------------------------------------
+# LLM-as-a-Judge Settings
+# ---------------------------------------------------------------------------
+judge:
+  model_name: "meta-llama/Llama-2-7b-chat-hf"
+  temperature: 0.1
+  max_tokens: 512
+  system_prompt: >
+    You are an impartial evaluation judge. Analyze the agent's execution trace
+    against the stated objective and return a JSON object with 'score' (0.0 to 1.0)
+    and 'reasoning' (string explanation).
+
+# ---------------------------------------------------------------------------
+# Metric Weights
+# ---------------------------------------------------------------------------
+metrics:
+  tool_correctness_weight: 0.30
+  tool_efficiency_weight: 0.20
+  plan_quality_weight: 0.25
+  plan_adherence_weight: 0.25
+
+# ---------------------------------------------------------------------------
+# Elo Rating System
+# ---------------------------------------------------------------------------
+elo:
+  initial_rating: 1500
+  k_factor: 32
+  min_matches: 5

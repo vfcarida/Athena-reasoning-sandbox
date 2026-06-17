@@ -1,0 +1,87 @@
+# Athena Reasoning Sandbox — Pretraining Configuration
+# Covers both from-scratch (1a) and continued pretraining (1b)
+
+# ---------------------------------------------------------------------------
+# Model Architecture (From-Scratch)
+# ---------------------------------------------------------------------------
+architecture:
+  model_type: "gpt2"                   # Base architecture: gpt2, llama, mistral
+  vocab_size: 32000                    # Vocabulary size for tokenizer
+  hidden_size: 768                     # Hidden dimension (d_model)
+  num_hidden_layers: 12                # Number of transformer layers
+  num_attention_heads: 12              # Number of attention heads
+  intermediate_size: 3072              # FFN intermediate dimension (4 * hidden_size)
+  max_position_embeddings: 2048        # Maximum context window length
+  hidden_act: "gelu"                   # Activation function
+  layer_norm_eps: 1.0e-5               # Layer normalization epsilon
+  tie_word_embeddings: true            # Share input/output embeddings
+
+# ---------------------------------------------------------------------------
+# Tokenizer (From-Scratch)
+# ---------------------------------------------------------------------------
+tokenizer:
+  type: "bpe"                          # Tokenizer type: bpe, unigram, wordpiece
+  vocab_size: 32000                    # Must match architecture.vocab_size
+  min_frequency: 2                     # Minimum token frequency
+  special_tokens:
+    - "<s>"                            # BOS
+    - "</s>"                           # EOS
+    - "<unk>"                          # Unknown
+    - "<pad>"                          # Padding
+    - "<think>"                        # SwiReasoning: enter latent mode
+    - "</think>"                       # SwiReasoning: exit latent mode
+
+# ---------------------------------------------------------------------------
+# Continued Pretraining (Domain Adaptation)
+# ---------------------------------------------------------------------------
+continued_pretraining:
+  base_model: "meta-llama/Llama-2-7b-hf"   # HF model to continue from
+  rope_scaling:
+    type: "yarn"                       # RoPE scaling: linear, dynamic, yarn
+    factor: 4.0                        # Context extension factor (e.g., 4x = 8192 → 32768)
+  freeze_embeddings: false             # Whether to freeze embedding layers
+
+# ---------------------------------------------------------------------------
+# Data Pipeline
+# ---------------------------------------------------------------------------
+data:
+  corpus_path: "./data/corpus/"        # Directory or file with training text
+  validation_split: 0.05              # Fraction reserved for validation
+  max_seq_length: 2048                 # Sequence length for training
+  preprocessing:
+    lowercase: false
+    strip_whitespace: true
+    min_doc_length: 50                 # Minimum document length (tokens)
+
+# ---------------------------------------------------------------------------
+# Training Hyperparameters
+# ---------------------------------------------------------------------------
+training:
+  epochs: 3                           # Number of training epochs
+  batch_size: 8                        # Per-device batch size
+  gradient_accumulation_steps: 4       # Effective batch = batch_size * accumulation
+  learning_rate: 5.0e-4                # Peak learning rate
+  weight_decay: 0.01                   # L2 regularization
+  warmup_ratio: 0.05                   # Fraction of steps for linear warmup
+  lr_scheduler: "cosine"               # Scheduler: cosine, linear, constant
+  max_grad_norm: 1.0                   # Gradient clipping threshold
+  mixed_precision: "bf16"              # AMP dtype: fp16, bf16, no
+  gradient_checkpointing: true         # Reduce memory at cost of compute
+
+# ---------------------------------------------------------------------------
+# Checkpointing
+# ---------------------------------------------------------------------------
+checkpointing:
+  save_steps: 500                      # Save checkpoint every N steps
+  save_total_limit: 3                  # Maximum checkpoints to keep
+  output_dir: "./checkpoints/pretrain" # Checkpoint output directory
+  resume_from: null                    # Path to resume from (null = fresh start)
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  log_steps: 10                        # Log metrics every N steps
+  report_to: "none"                    # Options: none, wandb, tensorboard
+  project_name: "athena-pretrain"      # WandB project name
+  run_name: null                       # WandB run name (null = auto)

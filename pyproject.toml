@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "athena-reasoning-sandbox"
+version = "0.1.0"
+description = "Scientific experimentation framework for neural model development: pretraining, fine-tuning, merging, and adaptive inference"
+requires-python = ">=3.10"
+license = "MIT"
+authors = []
+keywords = [
+    "llm", "model-merging", "fine-tuning", "lora", "qlora",
+    "pretraining", "slerp", "ties", "dare", "swi-reasoning",
+    "entropy", "adaptive-inference",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+]
+
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.35.0",
+    "tokenizers>=0.15.0",
+    "accelerate>=0.25.0",
+    "datasets>=2.16.0",
+    "peft>=0.7.0",
+    "trl>=0.7.0",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.65.0",
+    "rich>=13.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/vfcarida/Athena-reasoning-sandbox"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.1",
+    "mypy>=1.7",
+]
+quantization = ["bitsandbytes>=0.41.0"]
+logging = ["wandb>=0.16.0", "tensorboard>=2.15.0"]
+bench = ["agent-bench"]
+all = ["athena-reasoning-sandbox[quantization,logging,dev]"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.10"
+strict = false

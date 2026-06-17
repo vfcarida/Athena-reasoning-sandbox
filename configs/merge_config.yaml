@@ -1,0 +1,52 @@
+# NeuroFusionBench — Merge Configuration
+# Compatible with Mergekit-style YAML schema
+#
+# This file defines the model merging strategy, source models,
+# and algorithm-specific hyperparameters.
+
+merge_method: slerp  # Options: slerp, ties, dare
+
+# ---------------------------------------------------------------------------
+# Source Models
+# ---------------------------------------------------------------------------
+models:
+  base_model:
+    path: "meta-llama/Llama-2-7b-hf"
+    revision: "main"
+
+  models_to_merge:
+    - path: "WizardLM/WizardLM-7B-V1.0"
+      weight: 0.5
+    - path: "lmsys/vicuna-7b-v1.5"
+      weight: 0.5
+
+# ---------------------------------------------------------------------------
+# SLERP Parameters
+# ---------------------------------------------------------------------------
+slerp:
+  interpolation_factor: 0.5       # t ∈ [0, 1]: blend ratio between p0 and p1
+  dot_threshold: 0.9995           # Threshold for colinearity fallback to lerp
+
+# ---------------------------------------------------------------------------
+# TIES-Merging Parameters
+# ---------------------------------------------------------------------------
+ties:
+  density_threshold: 0.2          # Bottom % of deltas to prune (magnitude-based)
+  consensus_method: "majority"    # Sign conflict resolution: "majority" | "sum"
+  normalize: true                 # Re-normalize after merge
+
+# ---------------------------------------------------------------------------
+# DARE Parameters
+# ---------------------------------------------------------------------------
+dare:
+  drop_rate: 0.3                  # Probability of dropping each delta parameter
+  rescale: true                   # Apply 1/(1-p) rescaling to survivors
+  seed: 42                        # Random seed for reproducibility
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+output:
+  path: "./merged_model"
+  dtype: "float32"                # Tensor dtype: float16, bfloat16, float32
+  save_tokenizer: true

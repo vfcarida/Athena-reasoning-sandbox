@@ -1,0 +1,99 @@
+# Athena Reasoning Sandbox — Fine-Tuning Configuration
+# Covers SFT (1c), LoRA, and QLoRA fine-tuning pipelines
+
+# ---------------------------------------------------------------------------
+# Base Model
+# ---------------------------------------------------------------------------
+model:
+  name: "meta-llama/Llama-2-7b-hf"    # HF model identifier
+  revision: "main"                     # Model revision / branch
+  trust_remote_code: false             # Allow custom code from HF Hub
+
+# ---------------------------------------------------------------------------
+# Supervised Fine-Tuning (SFT)
+# ---------------------------------------------------------------------------
+sft:
+  dataset_format: "alpaca"             # Format: alpaca, chatml, sharegpt
+  max_seq_length: 2048                 # Maximum sequence length
+  packing: false                       # Pack multiple samples into one sequence
+  template: |
+    ### Instruction:
+    {instruction}
+
+    ### Input:
+    {input}
+
+    ### Response:
+    {output}
+
+# ---------------------------------------------------------------------------
+# LoRA Configuration
+# ---------------------------------------------------------------------------
+lora:
+  rank: 16                             # LoRA rank (r): low rank decomposition dim
+  alpha: 32                            # LoRA alpha: scaling factor (alpha / r)
+  dropout: 0.05                        # Dropout on LoRA layers
+  target_modules:                      # Modules to apply LoRA adapters
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  bias: "none"                         # Bias training: none, all, lora_only
+  task_type: "CAUSAL_LM"              # Task type for PEFT
+
+# ---------------------------------------------------------------------------
+# QLoRA (4-bit Quantization)
+# ---------------------------------------------------------------------------
+qlora:
+  enabled: false                       # Enable 4-bit quantization
+  quantization_type: "nf4"             # Quant type: nf4, fp4
+  compute_dtype: "bfloat16"            # Compute dtype for quantized operations
+  use_double_quant: true               # Double quantization for extra savings
+  use_nested_quant: false              # Nested quantization (experimental)
+
+# ---------------------------------------------------------------------------
+# Training Hyperparameters
+# ---------------------------------------------------------------------------
+training:
+  epochs: 3                           # Number of training epochs
+  batch_size: 4                        # Per-device batch size
+  gradient_accumulation_steps: 8       # Effective batch = batch_size * accumulation
+  learning_rate: 2.0e-4                # Peak learning rate
+  weight_decay: 0.01                   # L2 regularization
+  warmup_ratio: 0.03                   # Fraction of steps for linear warmup
+  lr_scheduler: "cosine"               # Scheduler: cosine, linear, constant
+  max_grad_norm: 0.3                   # Gradient clipping threshold
+  mixed_precision: "bf16"              # AMP dtype: fp16, bf16, no
+  gradient_checkpointing: true         # Reduce memory at cost of compute
+  optim: "paged_adamw_8bit"            # Optimizer: adamw_torch, paged_adamw_8bit
+
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+dataset:
+  train_path: "./data/finetune/train.jsonl"   # Training data path
+  eval_path: "./data/finetune/eval.jsonl"     # Evaluation data path
+  text_field: "text"                           # Field name for text content
+  max_samples: null                            # Limit samples (null = all)
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+output:
+  dir: "./checkpoints/finetune"        # Output directory
+  save_steps: 200                      # Save every N steps
+  save_total_limit: 3                  # Max checkpoints to keep
+  merge_adapter: true                  # Merge LoRA back to base on completion
+  merged_output_dir: "./models/merged" # Directory for merged model
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  log_steps: 10
+  report_to: "none"                    # Options: none, wandb, tensorboard
+  project_name: "athena-finetune"
+  run_name: null
