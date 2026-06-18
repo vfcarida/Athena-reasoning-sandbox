@@ -116,21 +116,34 @@ class AgentBenchBridge:
         tokenizer: Any,
         output_path: str | Path,
         model_name: str = "athena-experiment",
+        provider: str = "huggingface",
+        prompt_template: str = "chatml",
+        adapter_path: Optional[str] = None,
+        adapter_name: Optional[str] = None,
+        has_thinking_tokens: bool = False,
+        lineage: Optional[dict[str, Any]] = None,
     ) -> Path:
         """Export a trained model in a format consumable by Agent-Bench.
 
-        Saves the model and tokenizer to disk in HF format, plus a metadata
-        file describing the model configuration for Agent-Bench.
+        Saves the model and tokenizer to disk in HF format, and writes an
+        `athena_experiment.yaml` configuration file compatible with Agent-Bench.
 
         Args:
             model: The trained model to export.
             tokenizer: The model's tokenizer.
             output_path: Directory to save the exported model.
-            model_name: Human-readable name for the model.
+            model_name: Human-readable name (model_id in Agent-Bench).
+            provider: Inference provider (e.g., huggingface, vllm).
+            prompt_template: Prompt formatting template (e.g., chatml).
+            adapter_path: Path to PEFT adapter, if applicable.
+            adapter_name: Name of the PEFT adapter.
+            has_thinking_tokens: Whether to enable Agent-Bench thinking_parser.
+            lineage: Metadata about parent models and merge operations.
 
         Returns:
             Path to the exported model directory.
         """
+        import yaml
         path = Path(output_path)
         path.mkdir(parents=True, exist_ok=True)
 
@@ -143,15 +156,49 @@ class AgentBenchBridge:
         if hasattr(tokenizer, "save_pretrained"):
             tokenizer.save_pretrained(str(path))
 
-        # Write metadata for Agent-Bench
+        # Generate Agent-Bench compatible YAML config
+        model_config = {
+            "model_id": model_name,
+            "provider": provider,
+            "model_path": str(path),
+            "prompt_template": prompt_template,
+            "device": "auto",
+            "parameters": {
+                "temperature": 0.0,
+                "max_tokens": 4096
+            }
+        }
+
+        if provider == "vllm":
+            model_config["tensor_parallel_size"] = 1
+            model_config["gpu_memory_utilization"] = 0.9
+        else:
+            model_config["torch_dtype"] = "bfloat16"
+
+        if adapter_path:
+            model_config["adapter_path"] = adapter_path
+            if adapter_name:
+                model_config["adapter_name"] = adapter_name
+
+        if has_thinking_tokens:
+            model_config["has_thinking_tokens"] = True
+
+        if lineage:
+            model_config["lineage"] = lineage
+
+        config_doc = {"models": [model_config]}
+
+        yaml_path = path / "athena_experiment.yaml"
+        with open(yaml_path, "w", encoding="utf-8") as f:
+            yaml.dump(config_doc, f, default_flow_style=False, sort_keys=False)
+
+        # Legacy metadata file for debugging
         metadata = {
             "model_name": model_name,
             "model_path": str(path),
             "framework": "athena-reasoning-sandbox",
             "num_parameters": sum(p.numel() for p in model.parameters()),
-            "device": str(next(model.parameters()).device),
         }
-
         with open(path / "athena_metadata.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
 
@@ -160,46 +207,44 @@ class AgentBenchBridge:
 
     def create_model_adapter(
         self,
-        model: nn.Module,
-        tokenizer: Any,
-        system_prompt: str = "",
-        max_tokens: int = 1024,
-        temperature: float = 0.7,
+        model_path: str,
+        provider: str = "huggingface",
+        adapter_path: Optional[str] = None,
     ) -> Any:
-        """Create an Agent-Bench ModelAdapter wrapping an Athena-trained model.
+        """Create a native Agent-Bench ModelAdapter wrapping an Athena-trained model.
 
-        The adapter implements Agent-Bench's model interface, allowing the
-        model to be used directly in Agent-Bench evaluation pipelines without
-        going through an API.
+        Instead of duplicating adapter logic, this delegates to Agent-Bench's
+        native implementations (e.g., HuggingFacePipelineAdapter, PEFTModelAdapter).
 
         Args:
-            model: The trained model.
-            tokenizer: The model's tokenizer.
-            system_prompt: Default system prompt for the adapter.
-            max_tokens: Maximum tokens for generation.
-            temperature: Sampling temperature.
+            model_path: Local path to the exported model.
+            provider: The Agent-Bench provider type ("huggingface", "vllm").
+            adapter_path: Path to LoRA weights (triggers PEFTAdapter if set).
 
         Returns:
-            An ``AthenaModelAdapter`` instance compatible with Agent-Bench.
+            A native Agent-Bench adapter instance.
 
         Raises:
             RuntimeError: If Agent-Bench is not available.
         """
         if not self._agent_bench_available:
-            logger.warning(
-                "Agent-Bench not available. Returning a standalone adapter."
+            raise RuntimeError(
+                "Agent-Bench is not installed. Native adapters cannot be created. "
+                "Install with `pip install -e ../Agent-Bench`."
             )
 
-        adapter = AthenaModelAdapter(
-            model=model,
-            tokenizer=tokenizer,
-            system_prompt=system_prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        from agent_bench.models import get_huggingface_adapter, get_vllm_adapter, get_peft_adapter
 
-        logger.info("ModelAdapter created for Agent-Bench evaluation.")
-        return adapter
+        if provider == "vllm":
+            adapter_cls = get_vllm_adapter()
+            return adapter_cls(model_path=model_path, tensor_parallel_size=1)
+        
+        if adapter_path:
+            adapter_cls = get_peft_adapter()
+            return adapter_cls(model_path=model_path, adapter_path=adapter_path)
+            
+        adapter_cls = get_huggingface_adapter()
+        return adapter_cls(model_path=model_path, device="auto", torch_dtype="auto")
 
     def run_benchmark(
         self,
@@ -324,119 +369,4 @@ class AgentBenchBridge:
         }
 
 
-class AthenaModelAdapter:
-    """Adapter wrapping an Athena-trained model for Agent-Bench compatibility.
 
-    Implements the interface expected by Agent-Bench's evaluation runners,
-    translating between Athena's model format and Agent-Bench's expected
-    input/output conventions.
-
-    This adapter handles:
-    - Message formatting (system, user, assistant roles)
-    - Token generation with configurable temperature
-    - Tool call response parsing (if the model supports function calling)
-    """
-
-    def __init__(
-        self,
-        model: nn.Module,
-        tokenizer: Any,
-        system_prompt: str = "",
-        max_tokens: int = 1024,
-        temperature: float = 0.7,
-    ) -> None:
-        """Initialize the model adapter.
-
-        Args:
-            model: The Athena-trained model.
-            tokenizer: The model's tokenizer.
-            system_prompt: Default system prompt.
-            max_tokens: Maximum tokens for generation.
-            temperature: Sampling temperature.
-        """
-        self.model = model
-        self.tokenizer = tokenizer
-        self.system_prompt = system_prompt
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-
-        try:
-            self.device = next(model.parameters()).device
-        except StopIteration:
-            self.device = torch.device("cpu")
-
-    async def generate(
-        self,
-        messages: list[dict[str, str]],
-        tools: Optional[list[dict]] = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """Generate a response from the model given a conversation.
-
-        This method follows the Agent-Bench adapter interface convention.
-
-        Args:
-            messages: List of message dicts with "role" and "content" keys.
-            tools: Optional list of tool definitions (for function calling).
-            **kwargs: Additional generation parameters.
-
-        Returns:
-            Dictionary with "response", "tool_calls" (if any), and metadata.
-        """
-        # Format messages into a prompt string
-        prompt = self._format_messages(messages)
-
-        # Tokenize
-        inputs = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.tokenizer.model_max_length or 2048,
-        ).to(self.device)
-
-        # Generate
-        max_new = kwargs.get("max_tokens", self.max_tokens)
-        temp = kwargs.get("temperature", self.temperature)
-
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new,
-                temperature=temp if temp > 0 else 1.0,
-                do_sample=temp > 0,
-                pad_token_id=self.tokenizer.pad_token_id,
-            )
-
-        # Decode response (only the new tokens)
-        new_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
-        response_text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
-
-        return {
-            "response": response_text.strip(),
-            "tool_calls": [],
-            "usage": {
-                "prompt_tokens": inputs["input_ids"].shape[-1],
-                "completion_tokens": len(new_tokens),
-            },
-        }
-
-    def _format_messages(self, messages: list[dict[str, str]]) -> str:
-        """Format a list of chat messages into a model prompt.
-
-        Args:
-            messages: List of message dictionaries.
-
-        Returns:
-            Formatted prompt string.
-        """
-        parts = []
-        if self.system_prompt:
-            parts.append(f"System: {self.system_prompt}")
-
-        for msg in messages:
-            role = msg.get("role", "user").capitalize()
-            content = msg.get("content", "")
-            parts.append(f"{role}: {content}")
-
-        parts.append("Assistant:")
-        return "\n\n".join(parts)
