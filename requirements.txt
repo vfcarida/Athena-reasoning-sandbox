@@ -24,6 +24,9 @@ pyyaml>=6.0
 # Utilities
 tqdm>=4.65.0
 rich>=13.0.0
+deepeval>=0.21.0
+boto3>=1.28.0
+
 
 # Logging (optional)
 # wandb>=0.16.0

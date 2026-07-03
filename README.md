@@ -118,9 +118,93 @@ If $H(X) > \text{threshold}$, the model injects a `<think>` token to expand late
 
 ---
 
+## 🧪 RAG TDD Evaluation Pathway (DeepEval & SageMaker)
+
+To ensure high-quality information generation and retrieval, Athena incorporates a rigid **CI/CD Quality Gate** evaluating the **RAG Triad**:
+
+1. **Faithfulness (Groundedness)**: Assesses if the actual output is factually aligned with the retrieval context.
+2. **Answer Relevance**: Measures how well the output addresses the user's query.
+3. **Context Precision**: Evaluates the ranking quality of the retriever (i.e. whether relevant nodes are placed at the top).
+
+The pipeline uses the **LLM-as-a-Judge** pattern, querying an external **AWS SageMaker Endpoint** as the evaluator.
+
+### 🏗️ RAG Evaluation Quality Gate Architecture
+
+```mermaid
+graph TD
+    subgraph RAG Pipeline
+        A[User Query] --> B[Retriever DB]
+        B -->|Context Documents| C[Generator LLM]
+        A --> C
+        C -->|Generated Answer| D[RAG Test Case]
+    end
+    
+    subgraph CI/CD Quality Gate
+        D -->|Evaluate Triad| E{deepeval Evaluator}
+        E -->|1. Faithfulness Metric| F{Score >= 0.85?}
+        E -->|2. Answer Relevance| G{Score >= 0.85?}
+        E -->|3. Context Precision| H{Score >= 0.85?}
+        
+        F -->|Pass| I[Collect Score]
+        G -->|Pass| I
+        H -->|Pass| I
+        
+        F -->|Fail| J[Raise AssertionError + Log Reason]
+        G -->|Fail| J
+        H -->|Fail| J
+        
+        I -->|All Passed| K[CI/CD Build Green]
+        J -->|Any Failed| L[CI/CD Build Red / Blocked]
+    end
+    
+    subgraph LLM Judge
+        E -.->|Query Judge| M[AWS SageMaker Runtime]
+        M -.->|Mocked in Tests| N[MockSageMakerLLM]
+    end
+    
+    style E fill:#2b3137,stroke:#fff,stroke-width:2px,color:#fff
+    style K fill:#2e7d32,stroke:#fff,stroke-width:2px,color:#fff
+    style L fill:#c62828,stroke:#fff,stroke-width:2px,color:#fff
+```
+
+### 🚀 Usage Guide
+
+```python
+from src.utils.rag_evaluator import SageMakerLLM, evaluate_rag_triad
+
+# 1. Instantiate SageMaker Judge Model
+judge = SageMakerLLM(
+    endpoint_name="my-sagemaker-llama3-endpoint",
+    region_name="us-east-1",
+    model_name="Llama 3 Judge"
+)
+
+# 2. Run RAG evaluation against the strict threshold (default >= 0.85)
+results = evaluate_rag_triad(
+    input_text="What is our return policy?",
+    actual_output="You can return any product within 30 days of purchase.",
+    retrieval_context=["Our return policy allows items to be returned within 30 days."],
+    expected_output="Items can be returned within 30 days.",
+    threshold=0.85,
+    judge_model=judge
+)
+```
+
+### 🔬 Testing and CI/CD Verification
+
+Our test suite uses a dynamic `MockSageMakerLLM` to safely simulate structured Pydantic verdicts without invoking AWS or generating computational costs.
+
+Run the RAG TDD test suite locally:
+```bash
+python -m pytest tests/test_rag_evaluator.py -v
+```
+
+---
+
 ## 🌉 Agent-Bench Integration
 
 Models built in Athena are not graded here. They are exported via the `AgentBenchBridge` to be rigorously evaluated against semantic and functional benchmarks.
+
 
 ```python
 from src.bridge.agent_bench_bridge import AgentBenchBridge
