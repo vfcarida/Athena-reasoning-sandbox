@@ -64,11 +64,8 @@ class AgentTelemetryTracer:
             OpenTelemetry span context manager or mock context manager.
         """
         if self.tracer:
-            span = self.tracer.start_as_current_span(name)
-            if attributes:
-                for k, v in attributes.items():
-                    span.set_attribute(k, str(v))
-            return span
+            string_attrs = {k: str(v) for k, v in attributes.items()} if attributes else None
+            return self.tracer.start_as_current_span(name, attributes=string_attrs)
         else:
             return MockSpan(name, attributes)
 

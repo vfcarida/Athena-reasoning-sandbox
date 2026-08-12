@@ -105,7 +105,7 @@ class AthenaQueryGuard:
         clean_query = self._clean_query(query)
 
         # 1. Check for SELECT * pattern
-        select_star_pattern = r"\bSELECT\s+(\*|\b\w+\.\*)\b"
+        select_star_pattern = r"\bSELECT\s+(\*|[\w_]+\.\*)"
         if re.search(select_star_pattern, clean_query, re.IGNORECASE):
             raise UnboundedSelectError(
                 "Athena FinOps Error: Unbounded 'SELECT *' queries are prohibited ($5/TB scan risk). "

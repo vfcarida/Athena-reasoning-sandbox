@@ -61,7 +61,7 @@ class AgentPlan(BaseModel):
     plan_id: str = Field(description="Unique UUID string identifying the plan.")
     task_goal: str = Field(min_length=3, description="Target task objective.")
     thinking_process: Optional[str] = Field(default=None, description="Latent reasoning trace.")
-    steps: List[ReasoningStep] = Field(min_items=1, description="Ordered list of execution steps.")
+    steps: List[ReasoningStep] = Field(min_length=1, description="Ordered list of execution steps.")
     estimated_complexity: int = Field(default=1, ge=1, le=10, description="Estimated complexity score.")
 
 
