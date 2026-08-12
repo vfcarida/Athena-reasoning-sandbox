@@ -17,6 +17,10 @@ An overthinking prevention system enforces hard limits on:
 
 This prevents infinite reasoning loops and excessive compute waste.
 
+Algorithmic Complexity:
+    - Logit Entropy Calculation: O(V) where V is vocabulary size.
+    - Autoregressive Step: O(L * V) where L is sequence length and V is vocabulary size.
+
 References:
     - Shannon, C. E. (1948). A Mathematical Theory of Communication.
     - DeepSeek-R1 and QwQ reasoning paradigms for thinking token injection.
@@ -24,13 +28,17 @@ References:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 import torch.nn.functional as F
+
+from src.reasoning.schemas import ActionType, AgentPlan, ReasoningStep
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +67,7 @@ class GenerationState:
     thinking_token_count: int = 0
     total_thinking_tokens: int = 0
     total_tokens: int = 0
-    entropy_history: list[float] = field(default_factory=list)
+    entropy_history: List[float] = field(default_factory=list)
 
 
 class SwiReasoningEngine:
@@ -70,24 +78,15 @@ class SwiReasoningEngine:
     Shannon entropy of the next-token probability distribution is computed. If
     entropy exceeds a configurable threshold, the engine enters "thinking" mode
     to allow the model to reason internally before producing visible output.
-
-    Example:
-        >>> from transformers import AutoModelForCausalLM, AutoTokenizer
-        >>> model = AutoModelForCausalLM.from_pretrained("gpt2")
-        >>> tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        >>> engine = SwiReasoningEngine(model, tokenizer, entropy_threshold=2.0)
-        >>> result = engine.generate_with_switch_thinking("Explain quantum computing:")
-        >>> print(result.output_text)
     """
 
-    # Control tokens injected into the generation stream
     THINK_START_TOKEN = "<think>"
     THINK_END_TOKEN = "</think>"
 
     def __init__(
         self,
-        model: object,
-        tokenizer: object,
+        model: Any,
+        tokenizer: Any,
         entropy_threshold: float = 1.5,
         max_switches: int = 2,
         max_thinking_tokens: int = 64,
@@ -97,20 +96,14 @@ class SwiReasoningEngine:
         """Initialize the SwiReasoning engine.
 
         Args:
-            model: A Hugging Face ``PreTrainedModel`` with a language modeling head
-                (e.g., ``AutoModelForCausalLM``).
+            model: A Hugging Face ``PreTrainedModel`` with a language modeling head.
             tokenizer: Corresponding ``PreTrainedTokenizer`` for the model.
             entropy_threshold: Shannon entropy threshold (in bits) above which the
                 engine considers the model "uncertain" and switches to thinking mode.
-                Typical values: 1.0–3.0 depending on vocabulary size.
-            max_switches: Maximum number of EXPLICIT→LATENT mode transitions allowed
-                per generation call. Prevents infinite oscillation.
-            max_thinking_tokens: Maximum consecutive tokens allowed in thinking mode
-                before forced exit. Prevents runaway internal reasoning.
-            thinking_temperature: Sampling temperature during thinking mode. Higher
-                values encourage exploration. Default: 1.2.
-            explicit_temperature: Sampling temperature during explicit mode. Lower
-                values favor greedy/confident output. Default: 0.7.
+            max_switches: Maximum number of EXPLICIT->LATENT mode transitions allowed.
+            max_thinking_tokens: Maximum consecutive tokens allowed in thinking mode.
+            thinking_temperature: Sampling temperature during thinking mode.
+            explicit_temperature: Sampling temperature during explicit mode.
         """
         self.model = model
         self.tokenizer = tokenizer
@@ -120,9 +113,8 @@ class SwiReasoningEngine:
         self.thinking_temperature = thinking_temperature
         self.explicit_temperature = explicit_temperature
 
-        # Determine device from model parameters
         try:
-            self.device = next(model.parameters()).device  # type: ignore[union-attr]
+            self.device = next(model.parameters()).device
         except (StopIteration, AttributeError):
             self.device = torch.device("cpu")
 
@@ -138,10 +130,7 @@ class SwiReasoningEngine:
 
         Converts logits to a probability distribution via softmax, then computes:
 
-            H(X) = −Σᵢ P(xᵢ) · log₂(P(xᵢ))
-
-        Safe against numerical issues: clamps near-zero probabilities to avoid
-        log(0) and handles NaN/Inf results gracefully.
+            H(X) = -sum_i P(x_i) * log_2(P(x_i))
 
         Args:
             logits: Raw unnormalized logit tensor of shape ``(vocab_size,)``
@@ -151,24 +140,16 @@ class SwiReasoningEngine:
         Returns:
             Shannon entropy in bits (float). Returns 0.0 for degenerate inputs.
         """
-        # Ensure 1-D
         if logits.dim() > 1:
             logits = logits.squeeze(0)
 
-        # Convert to float64 for numerical precision
         logits = logits.to(torch.float64)
-
-        # Softmax to get probabilities
         probs = F.softmax(logits, dim=-1)
-
-        # Clamp to avoid log(0)
         probs = torch.clamp(probs, min=eps)
 
-        # Shannon entropy in bits (base 2)
         log_probs = torch.log2(probs)
         entropy = -torch.sum(probs * log_probs).item()
 
-        # Guard against NaN/Inf
         if not (isinstance(entropy, float) and entropy == entropy and entropy != float("inf")):
             return 0.0
 
@@ -178,55 +159,36 @@ class SwiReasoningEngine:
         self,
         prompt: str,
         max_new_tokens: int = 128,
-    ) -> "GenerationResult":
-        """Run autoregressive generation with entropy-guided mode switching.
-
-        Performs token-by-token decoding. At each step:
-        1. Forward pass to get next-token logits.
-        2. Compute Shannon entropy of the logit distribution.
-        3. If in EXPLICIT mode and entropy > threshold → switch to LATENT
-           (inject ``<think>``).
-        4. If in LATENT mode and entropy < threshold → switch to EXPLICIT
-           (inject ``</think>``).
-        5. Enforce overthinking limits (max_switches, max_thinking_tokens).
-        6. Sample next token using mode-appropriate temperature.
+    ) -> GenerationResult:
+        """Run synchronous autoregressive generation with entropy-guided mode switching.
 
         Args:
-            prompt: Input text prompt to continue generating from.
+            prompt: Input text prompt.
             max_new_tokens: Maximum number of new tokens to generate.
 
         Returns:
-            A :class:`GenerationResult` containing the full output text,
-            visible-only text, generation state, and per-token entropy trace.
+            A GenerationResult containing output text and generation stats.
         """
         state = GenerationState()
 
-        # Tokenize the input prompt
-        input_ids = self.tokenizer.encode(prompt, return_tensors="pt")  # type: ignore[union-attr]
+        input_ids = self.tokenizer.encode(prompt, return_tensors="pt")
         input_ids = input_ids.to(self.device)
 
-        generated_tokens: list[str] = []
-        all_tokens: list[str] = []
+        generated_tokens: List[str] = []
+        all_tokens: List[str] = []
         current_ids = input_ids
 
         logger.info("Starting SwiReasoning generation: max_new_tokens=%d", max_new_tokens)
 
         for step in range(max_new_tokens):
-            # Forward pass (no gradient computation needed for inference)
             with torch.no_grad():
-                outputs = self.model(current_ids)  # type: ignore[operator]
-                logits = outputs.logits[:, -1, :]  # Shape: (1, vocab_size)
+                outputs = self.model(current_ids)
+                logits = outputs.logits[:, -1, :]
 
-            # Compute entropy of the next-token distribution
             entropy = self.calculate_entropy(logits)
             state.entropy_history.append(entropy)
 
-            # ─────────────────────────────────────────────────────────────
-            # State Machine: Mode Transition Logic
-            # ─────────────────────────────────────────────────────────────
-
             if state.mode == InferenceMode.EXPLICIT:
-                # Check if we should enter thinking mode
                 if (
                     entropy > self.entropy_threshold
                     and state.switch_count < self.max_switches
@@ -235,35 +197,16 @@ class SwiReasoningEngine:
                     state.switch_count += 1
                     state.thinking_token_count = 0
                     all_tokens.append(self.THINK_START_TOKEN)
-                    logger.debug(
-                        "Step %d: EXPLICIT → LATENT (entropy=%.4f > %.4f, switch #%d)",
-                        step, entropy, self.entropy_threshold, state.switch_count,
-                    )
 
             elif state.mode == InferenceMode.LATENT:
-                # Check if we should exit thinking mode
                 should_exit = (
                     entropy < self.entropy_threshold
                     or state.thinking_token_count >= self.max_thinking_tokens
                 )
-
                 if should_exit:
-                    forced = state.thinking_token_count >= self.max_thinking_tokens
                     state.mode = InferenceMode.EXPLICIT
                     all_tokens.append(self.THINK_END_TOKEN)
-                    logger.debug(
-                        "Step %d: LATENT → EXPLICIT (%s, entropy=%.4f, "
-                        "thinking_tokens=%d)",
-                        step,
-                        "FORCED EXIT" if forced else "entropy dropped",
-                        entropy,
-                        state.thinking_token_count,
-                    )
                     state.thinking_token_count = 0
-
-            # ─────────────────────────────────────────────────────────────
-            # Token Sampling with Mode-Dependent Temperature
-            # ─────────────────────────────────────────────────────────────
 
             temperature = (
                 self.thinking_temperature
@@ -275,12 +218,10 @@ class SwiReasoningEngine:
             probs = F.softmax(scaled_logits, dim=-1)
             next_token_id = torch.multinomial(probs, num_samples=1)
 
-            # Decode the sampled token
-            token_text = self.tokenizer.decode(  # type: ignore[union-attr]
+            token_text = self.tokenizer.decode(
                 next_token_id[0], skip_special_tokens=False
             )
 
-            # Track tokens
             all_tokens.append(token_text)
             state.total_tokens += 1
 
@@ -290,16 +231,12 @@ class SwiReasoningEngine:
             else:
                 generated_tokens.append(token_text)
 
-            # Check for EOS
             eos_token_id = getattr(self.tokenizer, "eos_token_id", None)
             if eos_token_id is not None and next_token_id.item() == eos_token_id:
-                logger.debug("Step %d: EOS token encountered.", step)
                 break
 
-            # Append to sequence for next iteration
             current_ids = torch.cat([current_ids, next_token_id], dim=-1)
 
-        # Build final result
         output_text = "".join(all_tokens)
         visible_text = "".join(generated_tokens)
 
@@ -310,6 +247,31 @@ class SwiReasoningEngine:
             prompt=prompt,
         )
 
+    async def generate_with_switch_thinking_async(
+        self,
+        prompt: str,
+        max_new_tokens: int = 128,
+    ) -> GenerationResult:
+        """Asynchronous wrapper for non-blocking LLM inference.
+
+        Executes generation in an asyncio threadpool executor to avoid blocking
+        the main async event loop.
+
+        Args:
+            prompt: Input prompt text.
+            max_new_tokens: Maximum tokens to generate.
+
+        Returns:
+            GenerationResult object.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            self.generate_with_switch_thinking,
+            prompt,
+            max_new_tokens,
+        )
+
 
 @dataclass
 class GenerationResult:
@@ -318,7 +280,7 @@ class GenerationResult:
     Attributes:
         output_text: Full generated text including ``<think>``/``</think>`` markers.
         visible_text: Only the tokens generated in explicit (visible) mode.
-        state: Final :class:`GenerationState` with counters and entropy history.
+        state: Final GenerationState with counters and entropy history.
         prompt: The original input prompt.
     """
     output_text: str
@@ -326,12 +288,11 @@ class GenerationResult:
     state: GenerationState
     prompt: str
 
-    def summary(self) -> dict[str, object]:
+    def summary(self) -> Dict[str, Union[int, float]]:
         """Return a summary dictionary of the generation run.
 
         Returns:
-            Dictionary with key statistics: total tokens, thinking tokens,
-            switch count, overthinking ratio, and entropy statistics.
+            Dictionary with key statistics.
         """
         entropy_hist = self.state.entropy_history
         avg_entropy = sum(entropy_hist) / len(entropy_hist) if entropy_hist else 0.0
@@ -353,19 +314,32 @@ class GenerationResult:
             "entropy_min": round(min_entropy, 4),
         }
 
+    def to_agent_plan(self) -> AgentPlan:
+        """Extract a structured AgentPlan object from generation output.
+
+        Returns:
+            Pydantic AgentPlan object representing the Plan-then-Execute trajectory.
+        """
+        steps = [
+            ReasoningStep(
+                step_number=1,
+                rationale="Execute primary generated task based on explicit inference.",
+                action_type=ActionType.FINAL_ANSWER,
+                tool_name="final_answer",
+                tool_args={"text": self.visible_text},
+            )
+        ]
+        return AgentPlan(
+            plan_id=str(uuid.uuid4()),
+            task_goal=self.prompt,
+            thinking_process=self.output_text if "<think>" in self.output_text else None,
+            steps=steps,
+            estimated_complexity=1,
+        )
+
 
 class SwiReasoningSimulator:
-    """Lightweight simulator for SwiReasoning without requiring a real model.
-
-    Generates synthetic logit distributions with controllable entropy levels
-    to demonstrate the mode-switching behavior. Useful for testing, demos,
-    and environments where GPU models are unavailable.
-
-    Example:
-        >>> sim = SwiReasoningSimulator(vocab_size=1000, entropy_threshold=2.0)
-        >>> result = sim.simulate("Test prompt", num_steps=20)
-        >>> print(result.summary())
-    """
+    """Lightweight simulator for SwiReasoning without requiring a real GPU model."""
 
     def __init__(
         self,
@@ -375,15 +349,7 @@ class SwiReasoningSimulator:
         max_thinking_tokens: int = 32,
         seed: Optional[int] = 42,
     ) -> None:
-        """Initialize the simulator.
-
-        Args:
-            vocab_size: Size of the simulated vocabulary.
-            entropy_threshold: Entropy threshold for mode switching.
-            max_switches: Maximum mode switches allowed.
-            max_thinking_tokens: Maximum consecutive thinking tokens.
-            seed: Random seed for reproducibility. None for non-deterministic.
-        """
+        """Initialize the simulator."""
         self.vocab_size = vocab_size
         self.entropy_threshold = entropy_threshold
         self.max_switches = max_switches
@@ -391,37 +357,16 @@ class SwiReasoningSimulator:
 
         if seed is not None:
             torch.manual_seed(seed)
-            self.rng = torch.Generator().manual_seed(seed)
-        else:
-            self.rng = torch.Generator()
 
     def _generate_synthetic_logits(self, step: int, num_steps: int) -> torch.Tensor:
-        """Generate synthetic logits with varying entropy levels.
-
-        Creates a pattern where entropy oscillates — starting low (confident),
-        rising mid-sequence (uncertain), and dropping again at the end.
-
-        Args:
-            step: Current generation step index.
-            num_steps: Total number of steps in the simulation.
-
-        Returns:
-            Tensor of shape ``(vocab_size,)`` with synthetic logit values.
-        """
+        """Generate synthetic logits with varying entropy levels."""
         import math
 
-        # Create an oscillating confidence pattern
         phase = step / max(num_steps - 1, 1)
-
-        # Entropy rises in the middle of the sequence and drops at the ends
-        # This simulates: confident → uncertain → confident
         uncertainty = math.sin(phase * math.pi) * 2.5 + 0.5
-
-        # Generate logits: low concentration = high entropy, high = low entropy
         concentration = max(0.1, 5.0 - uncertainty * 2.0)
         logits = torch.randn(self.vocab_size) * concentration
 
-        # Make the top token more dominant when concentration is high
         if concentration > 2.0:
             top_idx = torch.randint(0, self.vocab_size, (1,)).item()
             logits[top_idx] += concentration * 3.0
@@ -433,42 +378,23 @@ class SwiReasoningSimulator:
         prompt: str,
         num_steps: int = 30,
     ) -> GenerationResult:
-        """Run a simulated SwiReasoning generation.
-
-        Produces synthetic logits at each step, computes entropy, and performs
-        the same mode-switching logic as the real engine.
-
-        Args:
-            prompt: Input prompt text (used for display purposes).
-            num_steps: Number of generation steps to simulate.
-
-        Returns:
-            A :class:`GenerationResult` with the simulation output.
-        """
+        """Run a simulated SwiReasoning generation."""
         state = GenerationState()
-        all_tokens: list[str] = []
-        visible_tokens: list[str] = []
+        all_tokens: List[str] = []
+        visible_tokens: List[str] = []
 
-        # Simulated token vocabulary for display
         sample_words = [
             "the", "model", "processes", "input", "data",
             "with", "neural", "network", "layers", "to",
             "generate", "accurate", "predictions", "using",
-            "advanced", "reasoning", "capabilities", "and",
-            "sophisticated", "algorithms", "for", "better",
-            "understanding", "of", "complex", "patterns",
-            "in", "natural", "language", "processing",
+            "advanced", "reasoning", "capabilities",
         ]
 
-        logger.info("Starting SwiReasoning simulation: %d steps", num_steps)
-
         for step in range(num_steps):
-            # Generate synthetic logits
             logits = self._generate_synthetic_logits(step, num_steps)
             entropy = SwiReasoningEngine.calculate_entropy(logits)
             state.entropy_history.append(entropy)
 
-            # ─── State Machine (identical to real engine) ────────────
             if state.mode == InferenceMode.EXPLICIT:
                 if (
                     entropy > self.entropy_threshold
@@ -478,10 +404,6 @@ class SwiReasoningSimulator:
                     state.switch_count += 1
                     state.thinking_token_count = 0
                     all_tokens.append(SwiReasoningEngine.THINK_START_TOKEN)
-                    logger.debug(
-                        "Step %d: → LATENT (H=%.3f > %.3f)", step, entropy,
-                        self.entropy_threshold,
-                    )
 
             elif state.mode == InferenceMode.LATENT:
                 should_exit = (
@@ -491,12 +413,8 @@ class SwiReasoningSimulator:
                 if should_exit:
                     state.mode = InferenceMode.EXPLICIT
                     all_tokens.append(SwiReasoningEngine.THINK_END_TOKEN)
-                    logger.debug(
-                        "Step %d: → EXPLICIT (H=%.3f)", step, entropy,
-                    )
                     state.thinking_token_count = 0
 
-            # ─── Simulated Token Selection ───────────────────────────
             word_idx = step % len(sample_words)
             token = sample_words[word_idx]
             all_tokens.append(f" {token}")
@@ -508,7 +426,6 @@ class SwiReasoningSimulator:
             else:
                 visible_tokens.append(f" {token}")
 
-        # Close any open thinking block
         if state.mode == InferenceMode.LATENT:
             all_tokens.append(SwiReasoningEngine.THINK_END_TOKEN)
 
@@ -518,3 +435,12 @@ class SwiReasoningSimulator:
             state=state,
             prompt=prompt,
         )
+
+    async def simulate_async(
+        self,
+        prompt: str,
+        num_steps: int = 30,
+    ) -> GenerationResult:
+        """Asynchronously run simulated SwiReasoning generation."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.simulate, prompt, num_steps)
