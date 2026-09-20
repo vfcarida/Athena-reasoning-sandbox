@@ -9,7 +9,7 @@ To maintain high technical quality and architectural rigor across the repository
 1. **Strict Type Safety**: All Python code must be compatible with Python 3.11+ and pass strict `mypy` type checking without errors or `type: ignore` bypasses (unless strictly necessary and documented).
 2. **Coding Style**: Code must strictly conform to PEP 8 standards enforced via `ruff check` and `ruff format`.
 3. **Comprehensive Docstrings**: All public modules, classes, algorithms, and functions must include Google-style docstrings detailing purpose, parameters, return types, exceptions, and algorithmic complexity.
-4. **Test-Driven Development (TDD)**: Every bug fix or new feature must include corresponding unit tests in `tests/`. Line and branch coverage must remain above 90%.
+4. **Test-Driven Development (TDD)**: Every bug fix or new feature must include corresponding unit tests in `tests/`. Line and branch coverage should aim for the target threshold (current baseline is 39% unverified).
 
 ---
 
@@ -33,13 +33,16 @@ Before submitting a Pull Request:
    ruff check src evals tests
    mypy src evals --strict
    ```
-2. Run full unit test suite:
+2. Run unit test suite:
    ```bash
-   pytest tests/ -v --cov=src --cov-fail-under=90
+   # Lane 1 (lightweight offline subset):
+   pytest -m "not heavy" -q --cov=src --cov-report=term-missing
+   # Full suite (requires PyTorch):
+   pytest tests/ -v --cov=src
    ```
 3. Run DeepEval agent trajectory suite:
    ```bash
-   deepeval test run evals/test_trajectory_eval.py
+   deepeval test run evals/test_agent_trajectory.py
    ```
 4. PRs require passing CI build checks and approval from at least one core maintainer.
 

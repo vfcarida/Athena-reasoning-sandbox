@@ -1,6 +1,10 @@
 """Tests for the Agent-Bench Bridge."""
 
 import pytest
+
+pytestmark = pytest.mark.heavy
+pytest.importorskip("torch")
+
 import os
 from src.bridge.agent_bench_bridge import BridgeConfig, AgentBenchBridge
 

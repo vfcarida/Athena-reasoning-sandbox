@@ -1,6 +1,10 @@
 """Tests for model merging logic and SwiReasoning engine."""
 
 import pytest
+
+pytestmark = pytest.mark.heavy
+pytest.importorskip("torch")
+
 import torch
 from src.merging.merge_operators import TensorMergeOperators
 from src.reasoning.swi_reasoning import SwiReasoningSimulator

@@ -39,6 +39,7 @@ dependencies = [
     "rich>=13.0.0",
     "deepeval>=0.21.0",
     "boto3>=1.28.0",
+    "sqlglot>=20.0.0",
 ]
 
 [project.urls]
@@ -50,6 +51,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.1",
     "mypy>=1.7",
+    "moto[athena]>=5.0.0",
 ]
 quantization = ["bitsandbytes>=0.41.0"]
 logging = ["wandb>=0.16.0", "tensorboard>=2.15.0"]
@@ -60,7 +62,11 @@ all = ["athena-reasoning-sandbox[quantization,logging,dev]"]
 packages = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "evals"]
+pythonpath = ["."]
+markers = [
+    "heavy: marks tests as heavy (requires torch/AWS/paid APIs)",
+]
 
 [tool.ruff]
 target-version = "py310"

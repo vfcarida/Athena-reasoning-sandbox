@@ -8,7 +8,6 @@ import asyncio
 from src.reasoning.schemas import AgentPlan, ReasoningStep, ActionType, ToolCallPayload, ObservationPayload
 from src.engine.executor import ExecutiveEngineProcess
 from src.engine.grpc_boundary import ParallaxToolDispatcher
-from src.reasoning.swi_reasoning import SwiReasoningSimulator
 
 
 @pytest.mark.asyncio
@@ -83,9 +82,11 @@ async def test_parallax_tool_dispatcher():
     assert obs.output_data["echo"] == "hello boundary"
 
 
+@pytest.mark.heavy
 @pytest.mark.asyncio
 async def test_swi_reasoning_async_simulation():
     """Test async SwiReasoning simulator and AgentPlan extraction."""
+    from src.reasoning.swi_reasoning import SwiReasoningSimulator
     sim = SwiReasoningSimulator(vocab_size=1000, entropy_threshold=2.0, seed=42)
     res = await sim.simulate_async("Explain quantum computing", num_steps=15)
     assert res.state.total_tokens == 15

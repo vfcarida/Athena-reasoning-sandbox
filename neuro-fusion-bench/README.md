@@ -11,7 +11,7 @@ NeuroFusionBench is a production-grade Python framework for three pillars of AI 
 
 1. **Model Merging** — Mathematical fusion of neural weight tensors using SLERP, TIES-Merging, and DARE algorithms.
 2. **SwiReasoning** — Entropy-guided adaptive inference that dynamically switches between explicit generation and latent thinking modes.
-3. **Agent-Bench** — Rigorous evaluation suite for AI agent behavior with deterministic metrics and LLM-as-a-Judge semantic scoring.
+3. **Agent-Bench** — Evaluation suite for AI agent behavior with deterministic metrics and configurable LLM-as-a-Judge scoring (local Hugging Face pipeline or offline mock).
 
 ## Architecture
 
@@ -22,9 +22,7 @@ neuro-fusion-bench/
 │   └── eval_config.yaml           # Agent-Bench scenarios and judge settings
 ├── src/
 │   ├── main.py                    # Orchestrator — runs all 3 demo pipelines
-│   ├── merging/
-│   │   ├── merge_operators.py     # SLERP, TIES, DARE tensor operations
-│   │   └── merge_pipeline.py      # YAML-driven merge orchestrator
+│   │                              # (Imports TensorMergeOperators from root src/merging/)
 │   ├── reasoning/
 │   │   └── swi_reasoning.py       # Entropy-guided inference engine
 │   ├── evaluation/

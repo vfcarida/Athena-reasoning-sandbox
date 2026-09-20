@@ -1,6 +1,10 @@
 """Tests for the from-scratch and continued pretraining pipelines."""
 
 import pytest
+
+pytestmark = pytest.mark.heavy
+pytest.importorskip("torch")
+
 import torch
 from src.pretraining.from_scratch import TransformerFromScratch, PretrainingConfig, TextDataset
 from src.pretraining.continued_pretraining import ContinuedPretrainer, ContinuedPretrainingConfig

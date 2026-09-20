@@ -1,5 +1,25 @@
-"""Standardized execution sandbox module using E2B microVMs and Docker isolation."""
+"""Standardized execution sandbox module with Isolate-or-Refuse enforcement.
 
-from src.sandbox.e2b_sandbox import E2BSandboxEngine, SandboxExecutionResult, ResourceQuota
+Supports E2B microVMs, gVisor runsc, and container runtimes with strict CPU/memory/network quotas.
+Refuses unisolated execution by default, requiring explicit allow_unsafe_local=True for dev testing.
+"""
 
-__all__ = ["E2BSandboxEngine", "SandboxExecutionResult", "ResourceQuota"]
+from src.sandbox.e2b_sandbox import (
+    E2BSandboxEngine,
+    IsolationBackend,
+    ResourceQuota,
+    SandboxExecutionResult,
+    SandboxQuotaViolationError,
+    SandboxSecurityError,
+    SandboxUnavailableError,
+)
+
+__all__ = [
+    "E2BSandboxEngine",
+    "IsolationBackend",
+    "ResourceQuota",
+    "SandboxExecutionResult",
+    "SandboxQuotaViolationError",
+    "SandboxSecurityError",
+    "SandboxUnavailableError",
+]

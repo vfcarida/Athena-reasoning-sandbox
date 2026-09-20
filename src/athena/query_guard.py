@@ -1,44 +1,61 @@
 """AWS Athena FinOps Query Guard and Cost Protection Engine.
 
 Analyzes raw SQL queries prior to execution against AWS Athena ($5/TB scan cost).
-Algorithmic AST parsing enforces mandatory partition key filters in WHERE clauses,
-blocks unbounded SELECT * projections, and guarantees explicit LIMIT clauses.
+Uses sqlglot AST parsing to enforce mandatory partition key filters in WHERE clauses,
+block unbounded SELECT * projections, and guarantee explicit LIMIT clauses.
+
+Cost Guard Architectural Note:
+    - AST validation is a structural pre-execution filter (technical hygiene control).
+    - An explicit LIMIT clause restricts client result buffer sizes, but does NOT bound
+      Athena scan volume in columnar storage (Parquet/ORC scan entire column blocks).
+    - Real spending bounds must be enforced at execution time via Athena WorkGroup
+      BytesScannedCutoffPerQuery and client-side DataScannedInBytes polling/cancellation.
 
 Algorithmic Complexity:
-    - SQL Tokenization & Parsing: O(N) where N is length of SQL query string.
-    - Partition Filter Check: O(K) where K is number of WHERE clause tokens.
+    - SQL AST Parsing: O(N) where N is length of SQL query string.
+    - Partition Filter AST Traversal: O(K) where K is number of AST predicate nodes.
 """
 
 from __future__ import annotations
 
-import re
 import logging
-from typing import List, Optional, Set
+import re
+from typing import ClassVar
+
+import sqlglot
+from sqlglot import exp
 
 logger = logging.getLogger(__name__)
 
 
 class UnpartitionedQueryError(Exception):
     """Raised when a SQL query omits mandatory partition key filters in the WHERE clause."""
-    pass
 
 
 class UnboundedSelectError(Exception):
     """Raised when a SQL query uses SELECT * or omits mandatory projection and LIMIT bounds."""
-    pass
 
 
 class AthenaQueryGuard:
-    """Algorithmic pre-execution SQL guard enforcing AWS Athena FinOps compliance.
+    """AST-based pre-execution SQL guard enforcing AWS Athena FinOps compliance.
 
     Attributes:
         default_partition_keys: Common partition keys checked if none explicitly provided.
         max_default_limit: Hard upper bound on result set rows (default 10,000).
     """
 
-    DEFAULT_PARTITION_KEYS = {"dt", "date", "partition_date", "year", "month", "day", "tenant_id", "ds"}
+    DEFAULT_PARTITION_KEYS: ClassVar[set[str]] = {
+        "dt",
+        "date",
+        "partition_date",
+        "year",
+        "month",
+        "day",
+        "tenant_id",
+        "ds",
+    }
 
-    def __init__(self, default_partition_keys: Optional[Set[str]] = None) -> None:
+    def __init__(self, default_partition_keys: set[str] | None = None) -> None:
         """Initialize the Athena Query Guard.
 
         Args:
@@ -46,88 +63,173 @@ class AthenaQueryGuard:
         """
         self.partition_keys = default_partition_keys or self.DEFAULT_PARTITION_KEYS
 
+    def _parse_sql(self, query: str) -> exp.Expression:
+        """Parse raw SQL query into sqlglot AST expression (Trino/Athena dialect).
+
+        Args:
+            query: Raw SQL query string.
+
+        Returns:
+            sqlglot AST root node.
+
+        Raises:
+            UnpartitionedQueryError: If query fails to parse.
+        """
+        clean_query = self._clean_query(query)
+        try:
+            parsed = sqlglot.parse_one(clean_query, read="trino")
+        except Exception as exc:
+            raise UnpartitionedQueryError(f"Athena FinOps Error: Failed to parse SQL query: {exc}") from exc
+        return parsed
+
+    @classmethod
+    def _extract_select_nodes(cls, root: exp.Expression) -> list[exp.Select]:
+        """Extract top-level SELECT nodes requiring partition filtering (including CTEs / CTAS)."""
+        if isinstance(root, exp.Select):
+            return [root]
+        if isinstance(root, exp.Create):
+            sel = root.find(exp.Select)
+            return [sel] if sel else []
+        if isinstance(root, exp.Union):
+            # Recursively collect selects from Union branches
+            selects: list[exp.Select] = []
+            for branch in (root.this, root.expression):
+                selects.extend(cls._extract_select_nodes(branch))
+            return selects
+        sel = root.find(exp.Select)
+        return [sel] if sel else []
+
+    @classmethod
+    def _is_pruning_predicate(cls, node: exp.Expression | None, partition_keys: set[str]) -> bool:
+        """Recursively verify whether AST predicate enforces partition pruning on partition_keys.
+
+        Rejects:
+            - NULL checks (IS NULL, IS NOT NULL) which scan all data blocks.
+            - Function-wrapped partition keys (e.g. YEAR(dt) = 2026).
+            - Disjunctions (OR) where any branch omits a partition filter.
+            - Nested subqueries that do not filter the scanned table.
+        """
+        if node is None:
+            return False
+
+        if isinstance(node, exp.Paren):
+            return cls._is_pruning_predicate(node.this, partition_keys)
+
+        if isinstance(node, exp.And):
+            # In an AND conjunction, if either side prunes partition keys, the query prunes
+            return cls._is_pruning_predicate(node.left, partition_keys) or cls._is_pruning_predicate(
+                node.right, partition_keys
+            )
+
+        if isinstance(node, exp.Or):
+            # In an OR disjunction, EVERY branch must prune to prevent a full table scan
+            return cls._is_pruning_predicate(node.left, partition_keys) and cls._is_pruning_predicate(
+                node.right, partition_keys
+            )
+
+        if isinstance(node, (exp.Between, exp.In)):
+            return isinstance(node.this, exp.Column) and node.this.name.lower() in partition_keys
+
+        if isinstance(node, (exp.EQ, exp.GT, exp.GTE, exp.LT, exp.LTE)):
+            left_is_col = isinstance(node.left, exp.Column) and node.left.name.lower() in partition_keys
+            right_is_col = isinstance(node.right, exp.Column) and node.right.name.lower() in partition_keys
+
+            # Reject column-to-column comparisons (e.g. dt = dt or dt = other_col)
+            if left_is_col and not isinstance(node.right, exp.Column) and not node.right.find(exp.Column):
+                return True
+            return bool(right_is_col and not isinstance(node.left, exp.Column) and not node.left.find(exp.Column))
+
+        # All other AST nodes (exp.Is, exp.Func, exp.Anonymous, exp.Subquery, etc.) do NOT prune
+        return False
+
     def validate_partition_filter(
         self,
         query: str,
-        required_partition_keys: Optional[List[str]] = None,
+        required_partition_keys: list[str] | None = None,
     ) -> None:
-        """Verify query contains a WHERE clause filtering against partition keys.
+        """Verify query contains a WHERE clause filtering against partition keys via AST analysis.
 
         Args:
             query: Raw SQL query string.
             required_partition_keys: Specific partition keys required for this query.
 
         Raises:
-            UnpartitionedQueryError: If query omits WHERE clause or fails partition filter check.
+            UnpartitionedQueryError: If query omits WHERE clause or fails AST partition filter check.
         """
-        clean_query = self._clean_query(query)
-        target_keys = set(required_partition_keys) if required_partition_keys else self.partition_keys
+        target_keys = {k.lower() for k in (required_partition_keys or self.partition_keys)}
+        parsed = self._parse_sql(query)
+        select_nodes = self._extract_select_nodes(parsed)
 
-        # Extract WHERE clause
-        where_match = re.search(r"\bWHERE\b\s+(.*)", clean_query, re.IGNORECASE | re.DOTALL)
-        if not where_match:
+        if not select_nodes:
             raise UnpartitionedQueryError(
                 "Athena FinOps Error: Query lacks a WHERE clause. "
-                f"Must explicitly filter against partition keys: {sorted(list(target_keys))}"
+                f"Must explicitly filter against partition keys: {sorted(target_keys)}"
             )
 
-        where_clause = where_match.group(1).lower()
+        for sel in select_nodes:
+            where_node = sel.args.get("where")
+            if where_node is None:
+                raise UnpartitionedQueryError(
+                    "Athena FinOps Error: Query lacks a WHERE clause. "
+                    f"Must explicitly filter against partition keys: {sorted(target_keys)}"
+                )
 
-        # Check if at least one partition key is present in the WHERE clause
-        found_key = False
-        for key in target_keys:
-            # Pattern matching column usage e.g. "dt =", "dt >", "dt IN"
-            pattern = rf"\b{re.escape(key.lower())}\b"
-            if re.search(pattern, where_clause):
-                found_key = True
-                break
-
-        if not found_key:
-            raise UnpartitionedQueryError(
-                f"Athena FinOps Error: WHERE clause does not filter on required partition keys. "
-                f"Expected one of {sorted(list(target_keys))}. Query: '{query}'"
-            )
+            if not self._is_pruning_predicate(where_node.this, target_keys):
+                raise UnpartitionedQueryError(
+                    f"Athena FinOps Error: WHERE clause does not filter on required partition keys. "
+                    f"Expected one of {sorted(target_keys)}. Query: '{query}'"
+                )
 
     def validate_projections_and_limits(
         self,
         query: str,
         enforce_limit: bool = True,
     ) -> None:
-        """Verify query does not execute unbounded SELECT * projections.
+        """Verify query does not execute unbounded SELECT * projections and includes explicit LIMIT.
+
+        Note:
+            LIMIT is a client memory hygiene check, not an Athena scan-cost boundary. Athena charges
+            for the full volume of data scanned by column blocks regardless of LIMIT.
 
         Args:
             query: Raw SQL query string.
             enforce_limit: Whether to enforce explicit LIMIT clause presence.
 
         Raises:
-            UnboundedSelectError: If query contains SELECT * without explicit columns or missing LIMIT.
+            UnboundedSelectError: If query contains SELECT * or lacks explicit LIMIT when required.
         """
-        clean_query = self._clean_query(query)
+        parsed = self._parse_sql(query)
+        select_nodes = self._extract_select_nodes(parsed)
 
-        # 1. Check for SELECT * pattern
-        select_star_pattern = r"\bSELECT\s+(\*|[\w_]+\.\*)"
-        if re.search(select_star_pattern, clean_query, re.IGNORECASE):
-            raise UnboundedSelectError(
-                "Athena FinOps Error: Unbounded 'SELECT *' queries are prohibited ($5/TB scan risk). "
-                "Specify explicit column names (e.g., SELECT id, timestamp, payload)."
+        for sel in select_nodes:
+            # 1. Check for SELECT * pattern in AST projections
+            has_star = any(
+                isinstance(expr, exp.Star)
+                or (isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star))
+                for expr in sel.expressions
             )
-
-        # 2. Check for explicit LIMIT clause if requested
-        if enforce_limit:
-            limit_pattern = r"\bLIMIT\s+\d+\b"
-            if not re.search(limit_pattern, clean_query, re.IGNORECASE):
+            if has_star:
                 raise UnboundedSelectError(
-                    "Athena FinOps Error: Query lacks an explicit LIMIT clause. "
-                    "Append a LIMIT statement to restrict scan size (e.g., LIMIT 1000)."
+                    "Athena FinOps Error: Unbounded 'SELECT *' queries are prohibited ($5/TB scan risk). "
+                    "Specify explicit column names (e.g., SELECT id, timestamp, payload)."
                 )
+
+            # 2. Check for explicit LIMIT clause if requested
+            if enforce_limit:
+                has_limit = sel.args.get("limit") is not None or sel.find(exp.Limit) is not None
+                if not has_limit:
+                    raise UnboundedSelectError(
+                        "Athena FinOps Error: Query lacks an explicit LIMIT clause. "
+                        "Append a LIMIT statement to restrict scan size (e.g., LIMIT 1000)."
+                    )
 
     def validate_query(
         self,
         query: str,
-        required_partition_keys: Optional[List[str]] = None,
+        required_partition_keys: list[str] | None = None,
         enforce_limit: bool = True,
     ) -> None:
-        """Execute full algorithmic validation suite on target SQL query.
+        """Execute full AST validation suite on target SQL query.
 
         Args:
             query: Raw SQL query string.
@@ -140,7 +242,7 @@ class AthenaQueryGuard:
         """
         self.validate_partition_filter(query, required_partition_keys)
         self.validate_projections_and_limits(query, enforce_limit=enforce_limit)
-        logger.info("SQL query passed Athena FinOps cost validation: '%s'", query[:60])
+        logger.info("SQL query passed Athena FinOps AST cost validation: '%s'", query[:60])
 
     @staticmethod
     def _clean_query(query: str) -> str:

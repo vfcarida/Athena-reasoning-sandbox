@@ -1,5 +1,17 @@
-"""Checkpoint / Restore (C/R) state management module inspired by DeltaState and Crab."""
+"""Conversation JSON checkpoint / restore state management module."""
 
-from src.state.checkpoint_manager import CheckpointState, CheckpointManager
+from src.state.checkpoint_manager import (
+    CheckpointManager,
+    CheckpointState,
+    ConversationCheckpointManager,
+    ConversationStateCheckpoint,
+    compute_idempotency_key,
+)
 
-__all__ = ["CheckpointState", "CheckpointManager"]
+__all__ = [
+    "CheckpointManager",
+    "CheckpointState",
+    "ConversationCheckpointManager",
+    "ConversationStateCheckpoint",
+    "compute_idempotency_key",
+]

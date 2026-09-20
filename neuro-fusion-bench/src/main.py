@@ -17,11 +17,15 @@ Or from the project root:
 from __future__ import annotations
 
 import json
-import sys
 import os
+import sys
 
-# Ensure the project root is on the path for direct execution
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Ensure the repository root and project root are on the path for direct execution
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_bench_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+for _p in [_repo_root, _bench_root]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 # Force UTF-8 output encoding on Windows to support Unicode box-drawing chars
 if sys.platform == "win32":
@@ -30,11 +34,25 @@ if sys.platform == "win32":
 
 import torch
 
-from src.merging.merge_operators import TensorMergeOperators
-from src.reasoning.swi_reasoning import SwiReasoningEngine, SwiReasoningSimulator
+# Import canonical TensorMergeOperators from root src/merging/
+try:
+    from src.merging.merge_operators import TensorMergeOperators
+except ModuleNotFoundError:
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location(
+        "canonical_merge_operators",
+        os.path.join(_repo_root, "src", "merging", "merge_operators.py"),
+    )
+    if _spec and _spec.loader:
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        TensorMergeOperators = _mod.TensorMergeOperators
+    else:
+        raise
 from src.evaluation.agent_bench import AgentBenchSuite
 from src.evaluation.judge import LLMJudge
-from src.utils.metrics import shannon_entropy, elo_rating, overthinking_index
+from src.reasoning.swi_reasoning import SwiReasoningSimulator
+from src.utils.metrics import elo_rating, overthinking_index
 
 
 # ═════════════════════════════════════════════════════════════════════════════

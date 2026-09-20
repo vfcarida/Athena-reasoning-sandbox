@@ -1,27 +1,32 @@
 <div align="center">
   <h1>🧠 Athena Reasoning Sandbox</h1>
-  <p><b>Enterprise-Grade Agentic Reasoning, Parallax Cognitive-Executive Separation & AWS Athena Cost Optimization Framework</b></p>
+  <p><b>Scientific Neural Model Experimentation Toolkit & Experimental Agentic Infrastructure</b></p>
   <p>
-    <a href="https://github.com/vfcarida/Athena-reasoning-sandbox/actions"><img src="https://img.shields.io/github/actions/workflow/status/vfcarida/Athena-reasoning-sandbox/ci.yml?branch=main&style=flat-square&logo=github&label=Build%20Status" alt="Build Status"></a>
-    <a href="https://codecov.io/gh/vfcarida/Athena-reasoning-sandbox"><img src="https://img.shields.io/codecov/c/github/vfcarida/Athena-reasoning-sandbox?style=flat-square&logo=codecov&label=Coverage" alt="Coverage"></a>
+    <a href="https://github.com/vfcarida/Athena-reasoning-sandbox/actions"><img src="https://img.shields.io/badge/CI-unverified-yellow?style=flat-square&logo=github" alt="CI Status (Unverified)"></a>
+    <a href="docs/BASELINE.md"><img src="https://img.shields.io/badge/Coverage-unverified%20(39%25%20baseline)-yellow?style=flat-square&logo=codecov" alt="Coverage (Unverified Baseline)"></a>
     <a href="https://github.com/vfcarida/Athena-reasoning-sandbox/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License"></a>
-    <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python Version"></a>
-    <a href="https://confident-ai.com"><img src="https://img.shields.io/badge/DeepEval-Evaluated-success?style=flat-square&logo=pytest" alt="DeepEval"></a>
+    <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?style=flat-square&logo=python&logoColor=white" alt="Python Version"></a>
+    <a href="evals/test_agent_trajectory.py"><img src="https://img.shields.io/badge/DeepEval-unverified-yellow?style=flat-square&logo=pytest" alt="DeepEval (Unverified)"></a>
   </p>
 </div>
+
+> [!NOTE]
+> **Repository Status**: This repository contains (1) a working small-scale model-development toolkit (pretraining, LoRA/QLoRA config, SLERP/TIES/DARE merging) and (2) experimental, unintegrated agentic-infrastructure modules (engine, sandbox, athena, state, rag, telemetry) that are not wired into any end-to-end agent loop at this revision.
 
 ---
 
 ## 🌟 Overview & System Ambition
 
-**Athena Reasoning Sandbox** is a high-performance, cloud-native scientific framework designed for state-of-the-art Large Language Model (LLM) agentic reasoning, enterprise specialization, and cloud-scale data engineering. 
+**Athena Reasoning Sandbox** is a scientific framework comprising two distinct layers:
+1. **Working Model-Development Toolkit**: Validated, runnable pipelines for from-scratch and continued pretraining, LoRA/QLoRA parameter-efficient fine-tuning configuration, and mathematical model merging operators (SLERP, TIES-Merging, DARE).
+2. **Experimental Agentic Infrastructure (Unintegrated Prototypes)**: Standalone modules exploring cognitive-executive separation, query guards, sandboxing, and evaluation patterns that are currently isolated components rather than an end-to-end autonomous agent loop.
 
-Modern agentic deployments often suffer from structural vulnerabilities—including unsafe shell execution by reasoning components, exorbitant cloud query costs ($5/TB runaway AWS Athena scans), and non-deterministic trajectory failures. Athena addresses these challenges by introducing:
+The repository investigates solutions to common agentic design challenges:
 
-1. **Cognitive-Executive Separation (Parallax Principle)**: Restricts LLM reasoning processes from direct OS interaction by enforcing an isolated gRPC/HTTP interface boundary to an engine process/microVM sandbox.
-2. **Plan-then-Execute (P-t-E) Paradigm**: Structured output validation (Pydantic) guaranteeing deterministic agent plan generation prior to executive action.
-3. **AWS Athena FinOps Query Guards**: Algorithmic AST pre-execution parsing that enforces partition key filtering, explicit column selection, and automatic conversion to Snappy-compressed Apache Parquet/ORC via CTAS pipelines.
-4. **Trajectory Observability & DeepEval Suite**: Comprehensive LLM-as-a-Judge evaluations (`PlanQualityMetric`, `PlanAdherenceMetric`, `ToolCorrectnessMetric`, `TaskCompletionMetric`) paired with OpenTelemetry distributed tracing across the full `Prompt → Think → Plan → Tool Call → Observation` loop.
+1. **Cognitive-Executive Separation (Parallax Principle)**: Restricts LLM reasoning processes from direct OS interaction using an in-process typed dispatch interface (mocked/planned for remote API boundaries).
+2. **Plan-then-Execute (P-t-E) Paradigm**: Structured output validation (Pydantic) guaranteeing deterministic agent plan schemas prior to executive action.
+3. **AWS Athena FinOps Query Guards**: Regex linter that enforces partition key filtering, explicit column selection, and provides CTAS query rewriting for Snappy-compressed Apache Parquet/ORC.
+4. **Trajectory Observability & Evaluation**: Deterministic keyword heuristics (`PlanQualityMetric`, `PlanAdherenceMetric`, `ToolCorrectnessMetric`, `TaskCompletionMetric`) paired with OpenTelemetry span tracing prototypes.
 
 ---
 
@@ -34,15 +39,15 @@ sequenceDiagram
     autonumber
     participant LLM as Cognitive Reasoning Layer
     participant Guard as Pydantic Schema Validator
-    participant API as Parallax gRPC/HTTP Boundary
+    participant API as Parallax In-Process Dispatch Boundary
     participant Executive as Executive Engine Process
-    participant Sandbox as E2B / Docker MicroVM
+    participant Sandbox as Local Subprocess / E2B MicroVM
 
     LLM->>Guard: Emit Raw JSON Reasoning Plan
     Guard-->>LLM: Validate & Parse Structured Plan
-    LLM->>API: Dispatch Tool Request (No Direct OS Access)
-    API->>Executive: Authorize & Intercept Action
-    Executive->>Sandbox: Execute Tool in Isolated MicroVM
+    LLM->>API: Dispatch Tool Request (Typed Interface)
+    API->>Executive: Authorize & Route Action
+    Executive->>Sandbox: Execute Tool (Local Subprocess / E2B when Keyed)
     Sandbox-->>Executive: Tool Execution Result / Observation
     Executive-->>API: Sanitize & Encapsulate Output
     API-->>LLM: Return Observation Context
@@ -52,7 +57,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    SQL[Generated Athena SQL Query] --> Guard{Query Guard AST Filter}
+    SQL[Generated Athena SQL Query] --> Guard{Query Guard Regex Linter}
     
     Guard -->|Missing Partition WHERE Filter| Reject1[❌ Reject Execution - Error Code: ATHENA_UNPARTITIONED_QUERY]
     Guard -->|Contains SELECT *| Reject2[❌ Reject Execution - Error Code: ATHENA_UNBOUNDED_PROJECTION]
@@ -76,35 +81,35 @@ flowchart TD
 Athena-reasoning-sandbox/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml             # CI/CD pipeline (Ruff, Bandit, Pytest 90%+, DeepEval >= 0.75)
+│       └── ci.yml             # CI/CD pipeline (Ruff, Bandit, Pytest, DeepEval) [Unverified gate]
 ├── configs/                   # Production YAML configurations
-├── evals/                     # DeepEval trajectory evaluation suite
-│   ├── test_trajectory_eval.py# Custom metrics (PlanQuality, PlanAdherence, ToolCorrectness)
-│   └── metrics/               # Algorithmic evaluation scoring DAGs
+├── evals/                     # Trajectory evaluation suite
+│   ├── test_agent_trajectory.py# Custom metrics (PlanQuality, PlanAdherence, ToolCorrectness)
+│   └── metrics/               # Deterministic keyword evaluation scoring heuristics
 ├── src/
 │   ├── main.py                # System entry point and demonstration orchestrator
 │   ├── athena/                # AWS Athena query guards, CTAS pipelines, cost optimization
 │   │   ├── athena_client.py   # High-performance boto3 Athena wrapper with CTAS
-│   │   └── query_guard.py     # AST SQL parser enforcing partition filters & explicit projections
+│   │   └── query_guard.py     # Regex linter enforcing partition filters & explicit projections
 │   ├── bridge/                # Agent-Bench evaluation bridge connector
-│   ├── engine/                # Executive engine process & gRPC Parallax boundary
+│   ├── engine/                # Executive engine process & in-process typed dispatch
 │   │   ├── executor.py        # Executive tool processor
-│   │   └── grpc_boundary.py   # Cognitive-Executive isolated boundary
+│   │   └── grpc_boundary.py   # In-process typed dispatch boundary (mocked remote API)
 │   ├── finetuning/            # SFT, LoRA, and QLoRA 4-bit quantization adapters
 │   ├── merging/               # Tensor fusion operators (SLERP, TIES, DARE)
-│   ├── RAG/                   # BM25 + ADA-002 Hybrid Search & RAG evaluation metrics
+│   ├── rag/                   # BM25 + ADA-002 Hybrid Search & RAG evaluation metrics
 │   │   └── hybrid_search.py   # Reciprocal Rank Fusion (RRF) search engine
 │   ├── reasoning/             # SwiReasoning entropy simulator & Pydantic output schemas
 │   │   ├── schemas.py         # Type-safe structured output validation
-│   │   └── swi_reasoning.py   # Real-time Shannon entropy-guided inference loop
-│   ├── sandbox/               # E2B SDK & Docker MicroVM execution isolation
-│   │   └── e2b_sandbox.py     # Resource-quota controlled microVM sandbox
-│   ├── state/                 # DeltaState / Crab Checkpoint & Restore (C/R) interface
-│   │   └── checkpoint.py      # Conversation turn & OS state serializer
-│   ├── telemetry/             # OpenTelemetry distributed tracing & telemetry
+│   │   └── swi_reasoning.py   # Shannon entropy-guided simulation loop
+│   ├── sandbox/               # Sandbox execution engine
+│   │   └── e2b_sandbox.py     # Timeout-only local subprocess execution (microVM via E2B when keyed)
+│   ├── state/                 # Checkpoint & Restore (C/R) interface
+│   │   └── checkpoint_manager.py # Conversation JSON checkpoint & restore serializer
+│   ├── telemetry/             # OpenTelemetry distributed tracing & telemetry prototypes
 │   │   └── tracer.py          # Trace span builder for agentic loops
 │   └── utils/                 # Mathematical metrics, config, & environment verification
-└── tests/                     # Deterministic unit test suite (>90% target coverage)
+└── tests/                     # Deterministic unit test suite (Lane 1 green; 39% baseline coverage)
 ```
 
 ---
@@ -112,9 +117,9 @@ Athena-reasoning-sandbox/
 ## 🚀 Quick Start & Installation
 
 ### 1. Requirements & Prerequisites
-- Python 3.11+
-- Docker Engine / Docker Desktop (optional, for containerized sandbox execution)
-- AWS Credentials (optional, for Athena cloud data operations)
+- Python 3.10+ (tested on Python 3.12)
+- E2B API Key (optional, for remote microVM sandbox execution; defaults to local subprocess)
+- AWS Credentials (optional, for Athena cloud data operations; dry-run available)
 
 ### 2. Environment Setup
 
@@ -130,14 +135,17 @@ python -m venv .venv
 # On Linux/macOS:
 source .venv/bin/activate
 
-# Upgrade pip and install core dependencies
+# Upgrade pip and install Lane-1 dependencies (offline/torch-free)
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install pytest pytest-cov pytest-asyncio ruff bandit mypy pydantic pydantic-settings types-PyYAML pyyaml rich tqdm deepeval boto3 numpy
+
+# For full ML stack (requires heavy PyTorch ~2GB download):
+# pip install -r requirements.txt
 ```
 
 ### 3. Environment Configuration
 
-Create a `.env` file in the project root:
+Create a `.env` file in the project root (optional for offline testing):
 
 ```env
 AWS_ACCESS_KEY_ID=your_access_key_id
@@ -153,23 +161,31 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```bash
 python -m src.main
 ```
+*(Note: Runs standalone demonstrations of model fine-tuning, merging, and reasoning; does not invoke an integrated autonomous agent loop.)*
 
 ---
 
 ## 🔬 Evaluation & Testing Suite
 
-Athena implements a rigorous Test-Driven Development (TDD) evaluation framework powered by **DeepEval** and **Pytest**.
+Athena includes unit test suites and trajectory evaluation scripts.
 
-### Running Unit Tests & Coverage
+### Running Unit Tests (Lane 1 — Offline / Torch-Free)
 ```bash
-# Execute deterministic unit tests with strict coverage checks
-pytest tests/ -v --cov=src --cov-report=term-missing --cov-fail-under=90
+# Run lightweight offline test suite (28 tests, verified green)
+pytest -m "not heavy" -q --cov=src --cov-report=term-missing
+```
+*(Note: Baseline coverage is **39%** as measured in `docs/BASELINE.md`. The CI badge claim of `--cov-fail-under=90` is unverified and unachieved at this revision.)*
+
+### Running Heavy Tests (Lane 2 — PyTorch Required)
+```bash
+# Run heavy tests requiring PyTorch / ML dependencies
+pytest -m "heavy" -v
 ```
 
 ### Running DeepEval Agentic Trajectory Evaluation
 ```bash
 # Execute DeepEval trajectory evaluation suite
-deepeval test run evals/test_trajectory_eval.py
+deepeval test run evals/test_agent_trajectory.py
 ```
 
 ---
