@@ -26,8 +26,8 @@ from pydantic import ValidationError
 
 from src.athena.athena_client import AthenaClient
 from src.engine.agent_loop import AgentLoop, AgentLoopResult, AgentPlanner
+from src.engine.dispatcher import ParallaxToolDispatcher
 from src.engine.executor import ExecutiveEngineProcess
-from src.engine.grpc_boundary import ParallaxToolDispatcher
 from src.reasoning.schemas import ActionType, AgentPlan, ReasoningStep
 from src.sandbox.e2b_sandbox import E2BSandboxEngine
 

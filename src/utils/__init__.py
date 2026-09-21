@@ -1,5 +1,8 @@
-"""Utilities subpackage — Shared statistical functions and metrics."""
+"""Utilities subpackage — Shared statistical functions, configuration, and metrics."""
 
-from .metrics import shannon_entropy, elo_rating, overthinking_index
+from .config import AppConfig, config
+from .metrics import elo_rating, overthinking_index, shannon_entropy
 
-__all__ = ["shannon_entropy", "elo_rating", "overthinking_index"]
+Config = AppConfig
+
+__all__ = ["AppConfig", "Config", "config", "shannon_entropy", "elo_rating", "overthinking_index"]

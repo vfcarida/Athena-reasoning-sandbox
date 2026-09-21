@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import sqlglot
 from sqlglot import exp
@@ -80,18 +80,14 @@ class AthenaQueryGuard:
             parsed = sqlglot.parse_one(clean_query, read="trino")
         except Exception as exc:
             raise UnpartitionedQueryError(f"Athena FinOps Error: Failed to parse SQL query: {exc}") from exc
-        return parsed
+        return parsed  # type: ignore[return-value]
 
     @classmethod
     def _extract_select_nodes(cls, root: exp.Expression) -> list[exp.Select]:
         """Extract top-level SELECT nodes requiring partition filtering (including CTEs / CTAS)."""
         if isinstance(root, exp.Select):
             return [root]
-        if isinstance(root, exp.Create):
-            sel = root.find(exp.Select)
-            return [sel] if sel else []
         if isinstance(root, exp.Union):
-            # Recursively collect selects from Union branches
             selects: list[exp.Select] = []
             for branch in (root.this, root.expression):
                 selects.extend(cls._extract_select_nodes(branch))
@@ -100,7 +96,7 @@ class AthenaQueryGuard:
         return [sel] if sel else []
 
     @classmethod
-    def _is_pruning_predicate(cls, node: exp.Expression | None, partition_keys: set[str]) -> bool:
+    def _is_pruning_predicate(cls, node: Any, partition_keys: set[str]) -> bool:
         """Recursively verify whether AST predicate enforces partition pruning on partition_keys.
 
         Rejects:
@@ -260,3 +256,14 @@ class AthenaQueryGuard:
         cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
         # Normalize spaces
         return " ".join(cleaned.split())
+
+
+# Aliases and public exports
+QueryCostGuard = AthenaQueryGuard
+
+__all__ = [
+    "AthenaQueryGuard",
+    "QueryCostGuard",
+    "UnpartitionedQueryError",
+    "UnboundedSelectError",
+]

@@ -207,7 +207,8 @@ class LoRAFineTuner:
         Returns:
             PEFT-wrapped model with only LoRA parameters trainable.
         """
-        from peft import LoraConfig as PeftLoraConfig, get_peft_model, TaskType
+        from peft import LoraConfig as PeftLoraConfig
+        from peft import TaskType, get_peft_model
 
         task_type_map = {
             "CAUSAL_LM": TaskType.CAUSAL_LM,
@@ -334,8 +335,8 @@ class LoRAFineTuner:
         Returns:
             Tuple of (peft_model, tokenizer).
         """
-        from transformers import AutoModelForCausalLM, AutoTokenizer
         from peft import PeftModel
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(base_model_name)
         if tokenizer.pad_token is None:

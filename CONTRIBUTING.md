@@ -1,53 +1,81 @@
 # Contributing to Athena Reasoning Sandbox
 
-Thank you for your interest in contributing to **Athena Reasoning Sandbox**. We welcome contributions from AI researchers, data engineers, and cloud architects.
+Thank you for your interest in contributing to **Athena Reasoning Sandbox**! We welcome contributions from AI researchers, data engineers, cloud architects, and open-source practitioners.
 
-## 📜 Code of Conduct & Standards
+## 📜 Development Standards & Code Quality
 
-To maintain high technical quality and architectural rigor across the repository, all contributions must adhere to the following standards:
+To maintain high technical quality, reproducibility, and architectural safety, all contributions must adhere to the following standards:
 
-1. **Strict Type Safety**: All Python code must be compatible with Python 3.11+ and pass strict `mypy` type checking without errors or `type: ignore` bypasses (unless strictly necessary and documented).
-2. **Coding Style**: Code must strictly conform to PEP 8 standards enforced via `ruff check` and `ruff format`.
-3. **Comprehensive Docstrings**: All public modules, classes, algorithms, and functions must include Google-style docstrings detailing purpose, parameters, return types, exceptions, and algorithmic complexity.
-4. **Test-Driven Development (TDD)**: Every bug fix or new feature must include corresponding unit tests in `tests/`. Line and branch coverage should aim for the target threshold (current baseline is 39% unverified).
-
----
-
-## 🔁 Pull Request Guidelines & Workflow
-
-### 1. Branch Naming Convention
-- Feature branches: `feat/short-description`
-- Bug fixes: `fix/short-description`
-- Documentation/Evals: `docs/short-description` or `eval/short-description`
-
-### 2. Artifact Feedback Loop & AI Code Verification
-If you use generative AI models or coding assistants during development:
-- You must review all generated code for logic flaws, security vulnerabilities, or anti-patterns ("vibe coding").
-- Ensure all generated schemas (Pydantic/Zod) enforce explicit validation and defensive bounds.
-- Verify that SQL generation logic passes `AthenaQueryGuard` partition and projection checks.
-
-### 3. Human-in-the-Loop Review & CI Verification
-Before submitting a Pull Request:
-1. Run local linting and formatting:
-   ```bash
-   ruff check src evals tests
-   mypy src evals --strict
-   ```
-2. Run unit test suite:
-   ```bash
-   # Lane 1 (lightweight offline subset):
-   pytest -m "not heavy" -q --cov=src --cov-report=term-missing
-   # Full suite (requires PyTorch):
-   pytest tests/ -v --cov=src
-   ```
-3. Run DeepEval agent trajectory suite:
-   ```bash
-   deepeval test run evals/test_agent_trajectory.py
-   ```
-4. PRs require passing CI build checks and approval from at least one core maintainer.
+1. **Strict Type Safety**: All Python code must be compatible with Python 3.10+ and pass `mypy src/engine src/athena src/state src/sandbox` with zero type errors.
+2. **Linting & Formatting**: Code must conform to PEP 8 standards enforced via `ruff check src evals tests`.
+3. **Security Auditing**: Code must pass automated security audits with zero high-severity findings: `bandit -r src/ -x tests/ -s B105,B106,B615 -ll`.
+4. **Google-Style Docstrings**: All public classes, functions, and modules must include complete Google-style docstrings with parameter descriptions, return types, exceptions, and algorithmic complexity notes.
+5. **Architectural Separation**: Code must respect the **Parallax Principle** (Cognitive-Executive Separation). Reasoning loops must never directly execute system calls; all actions must route through the typed dispatcher and authorized executor.
+6. **FinOps Governance**: All analytical SQL queries must undergo AST validation via `AthenaQueryGuard` to enforce partition key bounding, projection limiting, and row limits.
 
 ---
 
-## 🏛️ Repository Owner & Maintainer
+## 🛠️ Local Development Setup
 
-Maintained by **Vinicius Caridá** ([@vfcarida](https://github.com/vfcarida)).
+### 1. Clone the Repository & Initialize Virtualenv
+
+```bash
+git clone https://github.com/vfcarida/Athena-reasoning-sandbox.git
+cd Athena-reasoning-sandbox
+
+# Create virtual environment
+python -m venv .venv
+
+# Activate environment (Windows PowerShell)
+.\.venv\Scripts\Activate.ps1
+# Activate environment (Linux / macOS)
+source .venv/bin/activate
+
+# Upgrade pip and install development dependencies
+pip install --upgrade pip
+pip install -e ".[dev]"
+```
+
+---
+
+## 🔬 Testing & Quality Verification
+
+Athena uses a dual-lane testing architecture to allow fast, deterministic local development without requiring cloud credentials or GPUs:
+
+### Lane 1: Fast Offline Testing (No Cloud, No GPU Required)
+Run the full local suite (100+ unit, integration, and FinOps tests) using in-memory DuckDB:
+
+```bash
+pytest -m "not e2b and not network" -v --cov=src --cov-report=term-missing
+```
+
+### Static Analysis & Linting
+
+```bash
+# Run Ruff linting
+ruff check src evals tests
+
+# Run MyPy type checking
+mypy src/engine src/athena src/state src/sandbox
+
+# Run Bandit security scanning
+bandit -r src/ -x tests/ -s B105,B106,B615 -ll
+```
+
+---
+
+## 🔁 Pull Request Lifecycle
+
+1. **Branch Naming**:
+   - Features: `feat/<feature-name>`
+   - Bug fixes: `fix/<bug-description>`
+   - Documentation: `docs/<topic>`
+   - Performance / Refactor: `refactor/<topic>`
+2. **Commit Hygiene**: Write clear, descriptive commit messages in the imperative mood (`feat: add async duckdb query client`).
+3. **Pull Request Checklist**: Fill out the PR template in `.github/pull_request_template.md` ensuring all tests and linters pass before requesting review.
+
+---
+
+## 📄 License & Code of Conduct
+
+By contributing to Athena Reasoning Sandbox, you agree that your contributions will be licensed under the project's [MIT License](LICENSE) and that you will abide by our [Code of Conduct](CODE_OF_CONDUCT.md).

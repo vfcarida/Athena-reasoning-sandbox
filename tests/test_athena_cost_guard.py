@@ -465,3 +465,33 @@ def test_athena_client_stop_query_exception_handled():
 
     assert "exceeding max allowed limit of 100 bytes" in str(exc_info.value)
 
+
+@pytest.mark.asyncio
+async def test_athena_client_async_execute_query():
+    """Verify async_execute_query completes and returns dry-run response asynchronously."""
+    client = AthenaClient(s3_staging_dir="s3://my-staging-bucket/")
+    sql = "SELECT user_id, timestamp FROM logs WHERE dt = '2026-08-12' LIMIT 500;"
+    res = await client.async_execute_query(sql, required_partition_keys=["dt"], dry_run=True)
+    assert res["status"] == "SUCCEEDED"
+    assert res["mode"] == "DRY_RUN"
+
+
+@pytest.mark.asyncio
+async def test_athena_client_async_wait_for_completion_mock():
+    """Verify async_wait_for_completion polls and returns succeeded result asynchronously."""
+    mock_boto = MagicMock()
+    mock_boto.start_query_execution.return_value = {"QueryExecutionId": "async-query-123"}
+    mock_boto.get_query_execution.return_value = {
+        "QueryExecution": {
+            "QueryExecutionId": "async-query-123",
+            "Status": {"State": "SUCCEEDED"},
+            "Statistics": {"DataScannedInBytes": 1024},
+            "WorkGroup": "primary",
+        }
+    }
+
+    client = AthenaClient(boto_client=mock_boto)
+    res = await client.async_wait_for_completion("async-query-123", poll_interval=0.01)
+    assert res["status"] == "SUCCEEDED"
+    assert res["data_scanned_in_bytes"] == 1024
+

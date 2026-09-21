@@ -12,8 +12,8 @@ Run directly:
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 # Ensure project root is on path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -31,8 +31,14 @@ import torch
 # ═════════════════════════════════════════════════════════════════════════════
 class C:
     """ANSI escape codes."""
-    H = "\033[95m"; B = "\033[94m"; CN = "\033[96m"; G = "\033[92m"
-    Y = "\033[93m"; R = "\033[91m"; BD = "\033[1m"; DM = "\033[2m"
+    H = "\033[95m"
+    B = "\033[94m"
+    CN = "\033[96m"
+    G = "\033[92m"
+    Y = "\033[93m"
+    R = "\033[91m"
+    BD = "\033[1m"
+    DM = "\033[2m"
     RS = "\033[0m"
 
 
@@ -58,7 +64,7 @@ def demo_from_scratch() -> None:
     """Demonstrate from-scratch Transformer initialization and one training step."""
     header("PHASE 1a: From-Scratch Pretraining")
 
-    from src.pretraining.from_scratch import TransformerFromScratch, PretrainingConfig, TextDataset
+    from src.pretraining.from_scratch import PretrainingConfig, TextDataset, TransformerFromScratch
 
     config = PretrainingConfig(
         vocab_size=1000,
@@ -116,7 +122,10 @@ def demo_continued_pretraining() -> None:
     """Demonstrate continued pretraining configuration (no model download)."""
     header("PHASE 1b: Continued Pretraining / Domain Adaptation")
 
-    from src.pretraining.continued_pretraining import ContinuedPretrainer, ContinuedPretrainingConfig
+    from src.pretraining.continued_pretraining import (
+        ContinuedPretrainer,
+        ContinuedPretrainingConfig,
+    )
 
     config = ContinuedPretrainingConfig(
         base_model="gpt2",
@@ -126,7 +135,7 @@ def demo_continued_pretraining() -> None:
         max_seq_length=1024,
     )
 
-    pretrainer = ContinuedPretrainer(config)
+    _pretrainer = ContinuedPretrainer(config)
 
     sub("Configuration Summary")
     metric("Base model", config.base_model)
@@ -157,8 +166,8 @@ def demo_lora_finetuning() -> None:
     """Demonstrate LoRA adapter configuration and SFT formatting."""
     header("PHASE 1c: Fine-Tuning — SFT + LoRA / QLoRA")
 
-    from src.finetuning.sft_trainer import SFTOrchestrator, SFTConfig
-    from src.finetuning.lora_trainer import LoRAFineTuner, LoRAConfig
+    from src.finetuning.lora_trainer import LoRAConfig
+    from src.finetuning.sft_trainer import SFTConfig, SFTOrchestrator
 
     sub("LoRA Configuration")
     lora_config = LoRAConfig(

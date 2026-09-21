@@ -9,10 +9,16 @@ This module provides reusable mathematical functions used across the framework:
 from __future__ import annotations
 
 import math
-from typing import Optional, Union
+from typing import Union
 
 import numpy as np
-import torch
+
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    HAS_TORCH = False
 
 
 def shannon_entropy(
@@ -50,7 +56,7 @@ def shannon_entropy(
         0.0
     """
     # Convert to numpy for unified processing
-    if isinstance(probabilities, torch.Tensor):
+    if torch is not None and isinstance(probabilities, torch.Tensor):
         probs = probabilities.detach().cpu().to(torch.float64).numpy()
     elif isinstance(probabilities, list):
         probs = np.array(probabilities, dtype=np.float64)

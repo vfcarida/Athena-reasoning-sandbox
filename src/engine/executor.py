@@ -23,6 +23,7 @@ from src.reasoning.schemas import ObservationPayload, ToolCallPayload
 
 if TYPE_CHECKING:
     from src.athena.athena_client import AthenaClient
+    from src.athena.duckdb_client import DuckDBClient
     from src.sandbox.e2b_sandbox import E2BSandboxEngine
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ DEFAULT_AUTHORIZED_TOOLS: set[str] = {
     "ping",
     "echo",
     "athena_query",
+    "duckdb_query",
     "sandbox_execute",
 }
 
@@ -52,6 +54,7 @@ class ExecutiveEngineProcess:
     def __init__(
         self,
         athena_client: AthenaClient | None = None,
+        duckdb_client: DuckDBClient | None = None,
         sandbox_engine: E2BSandboxEngine | None = None,
         authorized_tools: set[str] | None = None,
     ) -> None:
@@ -59,13 +62,15 @@ class ExecutiveEngineProcess:
 
         Args:
             athena_client: Optional AthenaClient instance for executing Athena queries.
+            duckdb_client: Optional DuckDBClient instance for executing local analytical queries.
             sandbox_engine: Optional E2BSandboxEngine instance for executing sandboxed code.
             authorized_tools: Optional set of authorized tool names. If None, defaults to
-                the standard system tools (ping, echo, athena_query, sandbox_execute).
+                the standard system tools (ping, echo, athena_query, duckdb_query, sandbox_execute).
                 If an empty set is passed, all tools are denied by default.
         """
         self._registry: dict[str, ToolHandlerCallable] = {}
         self._athena_client = athena_client
+        self._duckdb_client = duckdb_client
         self._sandbox_engine = sandbox_engine
 
         if authorized_tools is not None:
@@ -194,9 +199,32 @@ class ExecutiveEngineProcess:
                 "backend_used": result.backend_used,
             }
 
+        async def duckdb_query_handler(args: dict[str, Any]) -> dict[str, Any]:
+            client = self._duckdb_client
+            if client is None:
+                from src.athena.duckdb_client import DuckDBClient
+                client = DuckDBClient()
+                self._duckdb_client = client
+
+            sql = args.get("sql") or args.get("query")
+            if not sql:
+                raise ValueError("Missing required 'sql' or 'query' parameter in tool arguments.")
+
+            required_partition_keys = args.get("required_partition_keys")
+            enforce_limit = args.get("enforce_limit", True)
+            dry_run = args.get("dry_run", False)
+
+            return await client.async_execute_query(
+                sql=sql,
+                required_partition_keys=required_partition_keys,
+                enforce_limit=enforce_limit,
+                dry_run=dry_run,
+            )
+
         self._registry["ping"] = ping_handler
         self._registry["echo"] = echo_handler
         self._registry["athena_query"] = athena_query_handler
+        self._registry["duckdb_query"] = duckdb_query_handler
         self._registry["sandbox_execute"] = sandbox_execute_handler
 
     async def execute_tool_call(self, payload: ToolCallPayload) -> ObservationPayload:

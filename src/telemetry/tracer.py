@@ -16,14 +16,11 @@ import logging
 import time
 from typing import Any, Callable, Dict, Optional
 
-from src.utils.config import config
-
 logger = logging.getLogger(__name__)
 
 # Try importing opentelemetry; fallback gracefully if not installed
 try:
     from opentelemetry import trace
-    from opentelemetry.trace import Status, StatusCode, Tracer
     HAS_OPENTELEMETRY = True
 except ImportError:
     HAS_OPENTELEMETRY = False

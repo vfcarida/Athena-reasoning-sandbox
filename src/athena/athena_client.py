@@ -20,6 +20,7 @@ Algorithmic Complexity:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -369,6 +370,125 @@ class AthenaClient:
                 )
 
             time.sleep(poll_interval)
+
+    async def async_wait_for_completion(
+        self,
+        query_execution_id: str,
+        poll_interval: float = 0.5,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """Asynchronously poll Athena query execution, measure data scanned, and cancel on breach.
+
+        Args:
+            query_execution_id: AWS Athena QueryExecutionId.
+            poll_interval: Interval in seconds between status polls.
+            timeout_seconds: Hard timeout in seconds before query cancellation.
+
+        Returns:
+            Dict containing execution status, measured data_scanned_in_bytes, elapsed_time_seconds, and statistics.
+        """
+        if self.boto_client is None or query_execution_id.startswith("dry-run-"):
+            return {
+                "status": "SUCCEEDED",
+                "mode": "DRY_RUN",
+                "query_execution_id": query_execution_id,
+                "data_scanned_in_bytes": 0,
+                "elapsed_time_seconds": 0.0,
+                "workgroup": self.workgroup,
+                "max_scan_bytes": self.max_scan_bytes,
+            }
+
+        start_time = time.time()
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > timeout_seconds:
+                try:
+                    await asyncio.to_thread(self.boto_client.stop_query_execution, QueryExecutionId=query_execution_id)
+                except Exception as stop_err:  # noqa: BLE001
+                    logger.warning("Failed to cancel timed out Athena query %s: %s", query_execution_id, stop_err)
+                raise QueryTimeoutError(
+                    f"Athena query '{query_execution_id}' timed out after {elapsed:.2f}s "
+                    f"(limit: {timeout_seconds}s). Query was cancelled."
+                )
+
+            res = await asyncio.to_thread(self.boto_client.get_query_execution, QueryExecutionId=query_execution_id)
+            query_exec = res["QueryExecution"]
+            status_info = query_exec["Status"]
+            state = status_info["State"]
+            statistics = query_exec.get("Statistics", {})
+            data_scanned = statistics.get("DataScannedInBytes", 0)
+
+            if data_scanned > self.max_scan_bytes:
+                try:
+                    await asyncio.to_thread(self.boto_client.stop_query_execution, QueryExecutionId=query_execution_id)
+                except Exception as cancel_err:  # noqa: BLE001
+                    logger.warning("Failed to cancel query exceeding scan limit: %s", cancel_err)
+                raise ScanBytesLimitExceededError(
+                    f"Athena query '{query_execution_id}' scanned {data_scanned} bytes, "
+                    f"exceeding max allowed limit of {self.max_scan_bytes} bytes. Query was cancelled."
+                )
+
+            if state == "SUCCEEDED":
+                return {
+                    "status": "SUCCEEDED",
+                    "mode": "AWS_BOTO3",
+                    "query_execution_id": query_execution_id,
+                    "data_scanned_in_bytes": data_scanned,
+                    "elapsed_time_seconds": elapsed,
+                    "statistics": statistics,
+                    "workgroup": query_exec.get("WorkGroup", self.workgroup),
+                    "max_scan_bytes": self.max_scan_bytes,
+                }
+
+            if state in ("FAILED", "CANCELLED"):
+                reason = status_info.get("StateChangeReason", f"Query entered {state} state")
+                raise QueryExecutionError(
+                    f"Athena query '{query_execution_id}' failed ({state}): {reason}"
+                )
+
+            await asyncio.sleep(poll_interval)
+
+    async def async_execute_query(
+        self,
+        sql: str,
+        required_partition_keys: list[str] | None = None,
+        enforce_limit: bool = True,
+        dry_run: bool = False,
+        wait: bool = False,
+        poll_interval: float = 0.5,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """Asynchronously validate and execute a SQL query against AWS Athena.
+
+        Args:
+            sql: Raw SQL query string.
+            required_partition_keys: Required partition key names in WHERE clause.
+            enforce_limit: Whether to enforce explicit LIMIT clause presence.
+            dry_run: If True, validates query without sending to AWS Athena.
+            wait: If True, awaits query completion asynchronously.
+            poll_interval: Polling frequency in seconds when wait=True.
+            timeout_seconds: Timeout threshold in seconds when wait=True.
+
+        Returns:
+            Dictionary containing query execution status, QueryExecutionId, and execution metadata.
+        """
+        res = await asyncio.to_thread(
+            self.execute_query,
+            sql=sql,
+            required_partition_keys=required_partition_keys,
+            enforce_limit=enforce_limit,
+            dry_run=dry_run,
+            wait=False,
+        )
+
+        if wait and res.get("status") == "SUBMITTED":
+            return await self.async_wait_for_completion(
+                query_execution_id=res["query_execution_id"],
+                poll_interval=poll_interval,
+                timeout_seconds=timeout_seconds,
+            )
+
+        return res
 
     def execute_ctas_ingestion(
         self,

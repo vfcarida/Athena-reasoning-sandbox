@@ -7,20 +7,19 @@ and Context Precision. All comments and docstrings are in international English.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import asyncio
 from typing import Any, Optional
 
 import boto3
 from deepeval.metrics import (
-    FaithfulnessMetric,
     AnswerRelevancyMetric,
     ContextualPrecisionMetric,
+    FaithfulnessMetric,
 )
-from deepeval.test_case import LLMTestCase
 from deepeval.models.base_model import DeepEvalBaseLLM
-
+from deepeval.test_case import LLMTestCase
 from pydantic import BaseModel
 
 logger = logging.getLogger("athena.rag_evaluator")

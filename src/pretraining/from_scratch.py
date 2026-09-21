@@ -22,17 +22,16 @@ from __future__ import annotations
 
 import logging
 import math
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
 from torch import autocast
 from torch.cuda.amp import GradScaler
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LambdaLR
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset
 
 logger = logging.getLogger(__name__)
@@ -555,7 +554,7 @@ class TransformerFromScratch:
         path = Path(checkpoint_path)
         state_file = path / "training_state.pt" if path.is_dir() else path
 
-        checkpoint = torch.load(state_file, map_location=self.device, weights_only=False)
+        checkpoint = torch.load(state_file, map_location=self.device, weights_only=True)
 
         model.load_state_dict(checkpoint["model_state_dict"])
         if optimizer and "optimizer_state_dict" in checkpoint:

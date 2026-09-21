@@ -12,8 +12,10 @@ from src.athena.athena_client import (
     QueryTimeoutError,
     ScanBytesLimitExceededError,
 )
+from src.athena.duckdb_client import DuckDBClient
 from src.athena.query_guard import (
     AthenaQueryGuard,
+    QueryCostGuard,
     UnboundedSelectError,
     UnpartitionedQueryError,
 )
@@ -22,6 +24,8 @@ __all__ = [
     "AthenaClient",
     "AthenaQueryGuard",
     "CTASPipeline",
+    "DuckDBClient",
+    "QueryCostGuard",
     "QueryExecutionError",
     "QueryTimeoutError",
     "ScanBytesLimitExceededError",

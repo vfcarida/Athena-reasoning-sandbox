@@ -19,8 +19,8 @@ from typing import Any
 import pytest
 
 from src.engine.agent_loop import AgentLoop, AgentPlanner
+from src.engine.dispatcher import ParallaxToolDispatcher
 from src.engine.executor import ExecutiveEngineProcess
-from src.engine.grpc_boundary import ParallaxToolDispatcher
 from src.reasoning.schemas import ActionType, ReasoningStep
 from src.state.checkpoint_manager import (
     ConversationCheckpointManager,

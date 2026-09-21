@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import torch
 
@@ -162,12 +162,13 @@ class SFTOrchestrator:
 
         elif fmt == "sharegpt":
             # ShareGPT format: multi-turn conversation
-            conversations = sample.get("conversations", [])
+            conversations: list[dict[str, Any]] = sample.get("conversations", [])
             parts = []
             for turn in conversations:
-                role = turn.get("from", turn.get("role", "user"))
-                content = turn.get("value", turn.get("content", ""))
-                parts.append(f"<|{role}|>\n{content}")
+                if isinstance(turn, dict):
+                    role = turn.get("from", turn.get("role", "user"))
+                    content = turn.get("value", turn.get("content", ""))
+                    parts.append(f"<|{role}|>\n{content}")
             return "\n".join(parts)
 
         else:
@@ -280,7 +281,8 @@ class SFTOrchestrator:
         eval_dataset: Optional[Any],
     ) -> dict[str, Any]:
         """Train using TRL's SFTTrainer."""
-        from trl import SFTTrainer, SFTConfig as TRLSFTConfig
+        from trl import SFTConfig as TRLSFTConfig
+        from trl import SFTTrainer
 
         training_args = TRLSFTConfig(
             output_dir=self.config.output_dir,

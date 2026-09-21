@@ -4,15 +4,15 @@ Verifies custom trajectory evaluation metrics, Hybrid Search with Reciprocal Ran
 and OpenTelemetry tracer span creation.
 """
 
-import pytest
 from deepeval.test_case import LLMTestCase
+
 from evals.metrics.trajectory_metrics import (
-    PlanQualityMetric,
     PlanAdherenceMetric,
-    ToolCorrectnessMetric,
+    PlanQualityMetric,
     TaskCompletionMetric,
+    ToolCorrectnessMetric,
 )
-from src.rag.hybrid_search import HybridSearchEngine, Document
+from src.rag.hybrid_search import Document, HybridSearchEngine
 from src.telemetry.tracer import AgentTelemetryTracer
 
 

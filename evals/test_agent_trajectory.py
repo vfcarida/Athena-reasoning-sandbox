@@ -35,8 +35,8 @@ from src.engine.agent_loop import (
     AgentLoopResult,
     AgentPlanner,
 )
+from src.engine.dispatcher import ParallaxToolDispatcher
 from src.engine.executor import ExecutiveEngineProcess
-from src.engine.grpc_boundary import ParallaxToolDispatcher
 
 
 @pytest.mark.asyncio

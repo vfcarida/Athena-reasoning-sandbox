@@ -24,7 +24,7 @@ import json
 import logging
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -233,16 +233,16 @@ class AgentBenchBridge:
                 "Install with `pip install -e ../Agent-Bench`."
             )
 
-        from agent_bench.models import get_huggingface_adapter, get_vllm_adapter, get_peft_adapter
+        from agent_bench.models import get_huggingface_adapter, get_peft_adapter, get_vllm_adapter
 
         if provider == "vllm":
             adapter_cls = get_vllm_adapter()
             return adapter_cls(model_path=model_path, tensor_parallel_size=1)
-        
+
         if adapter_path:
             adapter_cls = get_peft_adapter()
             return adapter_cls(model_path=model_path, adapter_path=adapter_path)
-            
+
         adapter_cls = get_huggingface_adapter()
         return adapter_cls(model_path=model_path, device="auto", torch_dtype="auto")
 

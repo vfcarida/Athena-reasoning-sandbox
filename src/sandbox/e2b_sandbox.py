@@ -28,9 +28,9 @@ from typing import Any
 from src.utils.config import config
 
 try:
-    import resource  # POSIX only
+    import resource  # type: ignore[import-not-found]
 except ImportError:
-    resource = None  # Windows or non-POSIX
+    resource = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -487,7 +487,7 @@ class E2BSandboxEngine:
             if resource is not None:
                 try:
                     mem_bytes = self.quota.max_memory_mb * 1024 * 1024
-                    resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+                    resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))  # type: ignore[union-attr, attr-defined]
                 except Exception as rlim_err:  # noqa: BLE001
                     logger.debug("Could not set RLIMIT_AS: %s", rlim_err)
 

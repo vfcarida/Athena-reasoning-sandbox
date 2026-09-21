@@ -1,5 +1,25 @@
 """Reasoning subpackage — Entropy-guided adaptive inference engine."""
 
-from .swi_reasoning import SwiReasoningEngine
+from .schemas import (
+    ActionType,
+    AgentPlan,
+    ObservationPayload,
+    ReasoningStep,
+    ToolCallPayload,
+)
 
-__all__ = ["SwiReasoningEngine"]
+try:
+    from .swi_reasoning import SwiReasoningEngine, SwiReasoningSimulator
+except ImportError:
+    SwiReasoningEngine = None  # type: ignore[assignment, misc]
+    SwiReasoningSimulator = None  # type: ignore[assignment, misc]
+
+__all__ = [
+    "ActionType",
+    "AgentPlan",
+    "ObservationPayload",
+    "ReasoningStep",
+    "ToolCallPayload",
+    "SwiReasoningEngine",
+    "SwiReasoningSimulator",
+]

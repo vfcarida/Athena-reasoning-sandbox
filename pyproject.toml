@@ -26,6 +26,22 @@ classifiers = [
 ]
 
 dependencies = [
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "boto3>=1.28.0",
+    "sqlglot>=20.0.0",
+    "duckdb>=0.9.0",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.65.0",
+    "rich>=13.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/vfcarida/Athena-reasoning-sandbox"
+
+[project.optional-dependencies]
+ml = [
     "torch>=2.0.0",
     "transformers>=4.35.0",
     "tokenizers>=0.15.0",
@@ -33,30 +49,22 @@ dependencies = [
     "datasets>=2.16.0",
     "peft>=0.7.0",
     "trl>=0.7.0",
-    "numpy>=1.24.0",
-    "pyyaml>=6.0",
-    "tqdm>=4.65.0",
-    "rich>=13.0.0",
-    "deepeval>=0.21.0",
-    "boto3>=1.28.0",
-    "sqlglot>=20.0.0",
 ]
-
-[project.urls]
-Repository = "https://github.com/vfcarida/Athena-reasoning-sandbox"
-
-[project.optional-dependencies]
 dev = [
     "pytest>=7.4",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1.0",
     "ruff>=0.1",
     "mypy>=1.7",
+    "bandit>=1.7.0",
     "moto[athena]>=5.0.0",
+    "deepeval>=0.21.0",
 ]
+eval = ["deepeval>=0.21.0"]
 quantization = ["bitsandbytes>=0.41.0"]
 logging = ["wandb>=0.16.0", "tensorboard>=2.15.0"]
 bench = ["agent-bench"]
-all = ["athena-reasoning-sandbox[quantization,logging,dev]"]
+all = ["athena-reasoning-sandbox[ml,quantization,logging,dev,eval]"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
@@ -72,6 +80,33 @@ markers = [
 target-version = "py310"
 line-length = 100
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+"evals/*" = ["F403"]
+
 [tool.mypy]
-python_version = "3.10"
-strict = false
+ignore_missing_imports = true
+warn_unused_configs = false
+warn_redundant_casts = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "torch.*",
+    "transformers.*",
+    "peft.*",
+    "trl.*",
+    "datasets.*",
+    "tokenizers.*",
+    "boto3.*",
+    "botocore.*",
+    "e2b_code_interpreter.*",
+    "deepeval.*",
+    "agent_bench.*",
+    "moto.*",
+]
+ignore_missing_imports = true

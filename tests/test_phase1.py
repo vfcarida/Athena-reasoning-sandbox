@@ -3,11 +3,18 @@
 Tests Pydantic output validation, asynchronous execution, and Parallax API boundary isolation.
 """
 
+
 import pytest
-import asyncio
-from src.reasoning.schemas import AgentPlan, ReasoningStep, ActionType, ToolCallPayload, ObservationPayload
+
+from src.engine.dispatcher import ParallaxToolDispatcher
 from src.engine.executor import ExecutiveEngineProcess
-from src.engine.grpc_boundary import ParallaxToolDispatcher
+from src.reasoning.schemas import (
+    ActionType,
+    AgentPlan,
+    ObservationPayload,
+    ReasoningStep,
+    ToolCallPayload,
+)
 
 
 @pytest.mark.asyncio
@@ -80,6 +87,22 @@ async def test_parallax_tool_dispatcher():
     obs = await dispatcher.dispatch_tool_call(payload)
     assert obs.success is True
     assert obs.output_data["echo"] == "hello boundary"
+
+
+def test_grpc_boundary_deprecation_warning():
+    """Verify that importing from src.engine.grpc_boundary emits a DeprecationWarning."""
+    import importlib
+    import sys
+    import warnings
+
+    if "src.engine.grpc_boundary" in sys.modules:
+        del sys.modules["src.engine.grpc_boundary"]
+
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        mod = importlib.import_module("src.engine.grpc_boundary")
+        assert hasattr(mod, "ParallaxToolDispatcher")
+        assert any(issubclass(w.category, DeprecationWarning) for w in recorded)
 
 
 @pytest.mark.heavy

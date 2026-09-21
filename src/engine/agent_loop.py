@@ -14,8 +14,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.engine.dispatcher import ParallaxToolDispatcher
 from src.engine.executor import ExecutiveEngineProcess
-from src.engine.grpc_boundary import ParallaxToolDispatcher
 from src.reasoning.schemas import (
     ActionType,
     AgentPlan,

@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import json
 from typing import Any, Optional
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
-from pydantic import BaseModel
 from deepeval.models.base_model import DeepEvalBaseLLM
+from pydantic import BaseModel
 
 from src.utils.rag_evaluator import SageMakerLLM, evaluate_rag_triad
 
@@ -54,22 +54,22 @@ class MockSageMakerLLM(DeepEvalBaseLLM):
         # If a schema is specified, we populate and return a Pydantic instance of it
         if schema is not None:
             module_name = schema.__module__.lower()
-            schema_name = schema.__name__.lower()
-            
+            _schema_name = schema.__name__.lower()
+
             # Determine which metric is calling
             is_faithfulness = "faithfulness" in module_name
             is_relevancy = "answer_relevancy" in module_name
             is_precision = "contextual_precision" in module_name
-            
+
             # Determine fail state
             should_fail = (
                 (is_faithfulness and self.fail_faithfulness) or
                 (is_relevancy and self.fail_relevancy) or
                 (is_precision and self.fail_precision)
             )
-            
+
             verdict_val = "no" if should_fail else "yes"
-            
+
             if should_fail:
                 if is_faithfulness:
                     reason_val = "The context states Berlin is the capital, contradicting Paris."
@@ -119,7 +119,7 @@ class MockSageMakerLLM(DeepEvalBaseLLM):
                         data[f_name] = reason_val
                     else:
                         data[f_name] = "test"
-            
+
             if hasattr(schema, "model_validate"):
                 return schema.model_validate(data)
             else:
@@ -332,7 +332,7 @@ def test_sagemaker_llm_payload_and_invocation() -> None:
     assert kwargs["EndpointName"] == "test-endpoint"
     assert kwargs["ContentType"] == "application/json"
     assert kwargs["Accept"] == "application/json"
-    
+
     payload = json.loads(kwargs["Body"])
     assert payload["inputs"] == "Sample prompt"
     assert payload["parameters"]["temperature"] == 0.01
