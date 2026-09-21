@@ -18,7 +18,9 @@ import time
 import uuid
 from typing import Any
 
+import sqlglot
 from pydantic import BaseModel, ConfigDict, Field
+from sqlglot import exp
 
 from src.athena.athena_client import AthenaClient
 from src.athena.duckdb_client import DuckDBClient
@@ -112,48 +114,82 @@ class AutonomousDataAgent:
         default_partition_key: str = "dt",
         default_partition_val: str = "2026-09-01",
     ) -> tuple[str, str]:
-        """Reflect upon a FinOps rejection and synthesize a compliant SQL statement.
+        """Reflect upon a FinOps rejection and synthesize a compliant SQL statement via AST rewriting.
+
+        Uses sqlglot AST transformations rather than brittle regex substitutions, preserving
+        subqueries, CTEs, aliases, and complex expressions.
+
+        Args:
+            original_sql: Raw SQL query string that was rejected.
+            error_message: Error text from FinOps guard or execution engine.
+            default_partition_key: Column name to use for partition pruning (default "dt").
+            default_partition_val: Partition value literal (default "2026-09-01").
 
         Returns:
             Tuple of (refined_sql, reasoning_reflection_thought).
         """
-        refined = original_sql.strip().rstrip(";").strip()
+        dialect = "duckdb" if self.backend == "duckdb" else "trino"
+        cleaned = original_sql.strip().rstrip(";").strip()
+
+        try:
+            ast = sqlglot.parse_one(cleaned, read=dialect)
+        except Exception:
+            ast = None
 
         # 1. Reflection on missing partition filter
-        if "WHERE clause" in error_message or "partition filter" in error_message:
+        if "WHERE clause" in error_message or "partition filter" in error_message or "partition" in error_message.lower():
             thought = (
                 f"<think> Reflection: The query was rejected because it omits partition pruning "
                 f"on column '{default_partition_key}'. Scans on analytical data lakes require "
                 f"explicit partition bounding to avoid full table scans ($5/TB risk). "
                 f"Appending partition filter: WHERE {default_partition_key} = '{default_partition_val}'. </think>"
             )
-            if re.search(r"\bWHERE\b", refined, flags=re.IGNORECASE):
-                refined = re.sub(
-                    r"\bWHERE\b",
-                    f"WHERE {default_partition_key} = '{default_partition_val}' AND",
-                    refined,
-                    count=1,
-                    flags=re.IGNORECASE,
+            if ast is not None:
+                partition_pred = exp.EQ(
+                    this=exp.to_column(default_partition_key),
+                    expression=exp.Literal.string(default_partition_val),
                 )
-            elif re.search(r"\bLIMIT\b", refined, flags=re.IGNORECASE):
-                refined = re.sub(
-                    r"\bLIMIT\b",
-                    f"WHERE {default_partition_key} = '{default_partition_val}' LIMIT",
-                    refined,
-                    count=1,
-                    flags=re.IGNORECASE,
-                )
+                ast = ast.where(partition_pred, append=True)
+                refined = ast.sql(dialect=dialect)
             else:
-                refined = f"{refined} WHERE {default_partition_key} = '{default_partition_val}'"
+                if re.search(r"\bWHERE\b", cleaned, flags=re.IGNORECASE):
+                    refined = re.sub(
+                        r"\bWHERE\b",
+                        f"WHERE {default_partition_key} = '{default_partition_val}' AND",
+                        cleaned,
+                        count=1,
+                        flags=re.IGNORECASE,
+                    )
+                else:
+                    refined = f"{cleaned} WHERE {default_partition_key} = '{default_partition_val}'"
 
         # 2. Reflection on unbounded SELECT *
-        elif "Unbounded 'SELECT *" in error_message or "Unbounded projection" in error_message:
+        elif "Unbounded 'SELECT *" in error_message or "Unbounded projection" in error_message or "SELECT *" in error_message:
             thought = (
                 "<think> Reflection: The query was rejected due to an unbounded 'SELECT *' projection. "
                 "Columnar storage engines scan every column block in SELECT *. "
                 "Restricting projection to explicit columns: 'order_id, amount'. </think>"
             )
-            refined = re.sub(r"SELECT\s+\*", "SELECT order_id, amount", refined, count=1, flags=re.IGNORECASE)
+            if ast is not None:
+                # Replace Star nodes in select expressions
+                new_exprs = []
+                for expr in ast.expressions:
+                    is_star = isinstance(expr, exp.Star) or (
+                        isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star)
+                    )
+                    if is_star:
+                        new_exprs.extend([
+                            exp.to_column("order_id"),
+                            exp.to_column("amount"),
+                        ])
+                    else:
+                        new_exprs.append(expr)
+                if not new_exprs:
+                    new_exprs = [exp.to_column("order_id"), exp.to_column("amount")]
+                ast.set("expressions", new_exprs)
+                refined = ast.sql(dialect=dialect)
+            else:
+                refined = re.sub(r"SELECT\s+\*", "SELECT order_id, amount", cleaned, count=1, flags=re.IGNORECASE)
 
         # 3. Reflection on missing LIMIT
         elif "LIMIT" in error_message:
@@ -161,12 +197,23 @@ class AutonomousDataAgent:
                 "<think> Reflection: Query lacks an explicit LIMIT clause. "
                 "Appending 'LIMIT 100' to bound client result buffer. </think>"
             )
-            refined = f"{refined} LIMIT 100"
+            if ast is not None:
+                ast = ast.limit(100)
+                refined = ast.sql(dialect=dialect)
+            else:
+                refined = f"{cleaned} LIMIT 100"
 
         else:
             thought = f"<think> Reflection: Query failed with error '{error_message}'. Applying default hygiene: adding LIMIT 100. </think>"
-            if not re.search(r"\bLIMIT\b", refined, flags=re.IGNORECASE):
-                refined = f"{refined} LIMIT 100"
+            if ast is not None:
+                if ast.find(exp.Limit) is None:
+                    ast = ast.limit(100)
+                refined = ast.sql(dialect=dialect)
+            else:
+                if not re.search(r"\bLIMIT\b", cleaned, flags=re.IGNORECASE):
+                    refined = f"{cleaned} LIMIT 100"
+                else:
+                    refined = cleaned
 
         return refined, thought
 
