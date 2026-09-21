@@ -72,8 +72,17 @@ packages = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests", "evals"]
 pythonpath = ["."]
+asyncio_mode = "auto"
 markers = [
     "heavy: marks tests as heavy (requires torch/AWS/paid APIs)",
+    "e2b: marks tests requiring a live E2B sandbox API key",
+    "network: marks tests requiring outbound network access",
+]
+filterwarnings = [
+    # Suppress known Windows asyncio Proactor teardown noise from deepeval
+    # subprocesses. CPython closes the event loop before the transport GC
+    # finaliser runs; this is a platform limitation, not a test defect.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
 
 [tool.ruff]
