@@ -28,6 +28,16 @@ from src.state.checkpoint_manager import (
     ConversationStateCheckpoint,
     compute_idempotency_key,
 )
+from src.telemetry import (
+    AgentTelemetryTracer,
+    GenAISpanAttributes,
+    StatusCode,
+    set_span_attribute,
+    set_span_status,
+)
+from src.telemetry import (
+    tracer as default_tracer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +201,7 @@ class AgentLoop:
         dispatcher: ParallaxToolDispatcher | None = None,
         executor: ExecutiveEngineProcess | None = None,
         planner: AgentPlanner | None = None,
+        tracer: AgentTelemetryTracer | None = None,
     ) -> None:
         """Initialize the AgentLoop.
 
@@ -198,6 +209,7 @@ class AgentLoop:
             dispatcher: Optional custom ParallaxToolDispatcher.
             executor: Optional custom ExecutiveEngineProcess (used if dispatcher is None).
             planner: Optional AgentPlanner instance.
+            tracer: Optional AgentTelemetryTracer instance.
         """
         if dispatcher is not None:
             self.dispatcher = dispatcher
@@ -207,6 +219,7 @@ class AgentLoop:
             self.dispatcher = ParallaxToolDispatcher()
 
         self.planner = planner or AgentPlanner()
+        self.tracer = tracer or default_tracer
 
     async def run_plan(
         self,
@@ -232,93 +245,160 @@ class AgentLoop:
 
         logger.info("Starting execution of plan '%s' with %d steps", plan.plan_id, len(plan.steps))
 
-        for step in plan.steps:
-            action_type_str = (
-                step.action_type.value
-                if hasattr(step.action_type, "value")
-                else str(step.action_type)
+        with self.tracer.start_span(
+            f"agent.plan_execution.{plan.plan_id}",
+            attributes={
+                GenAISpanAttributes.GEN_AI_SYSTEM: "athena-reasoning-sandbox",
+                GenAISpanAttributes.GEN_AI_OPERATION_NAME: "run_plan",
+                GenAISpanAttributes.GEN_AI_PLAN_ID: plan.plan_id,
+                GenAISpanAttributes.GEN_AI_PLAN_STEP_COUNT: len(plan.steps),
+            },
+        ) as plan_span:
+            for step in plan.steps:
+                action_type_str = (
+                    step.action_type.value
+                    if hasattr(step.action_type, "value")
+                    else str(step.action_type)
+                )
+                idempotency_key = compute_idempotency_key(
+                    action_type_str, step.tool_name, step.tool_args
+                )
+
+                with self.tracer.start_span(
+                    f"agent.step.{step.step_number}",
+                    attributes={
+                        GenAISpanAttributes.GEN_AI_SYSTEM: "athena-reasoning-sandbox",
+                        GenAISpanAttributes.GEN_AI_OPERATION_NAME: "execute_step",
+                        GenAISpanAttributes.GEN_AI_PLAN_ID: plan.plan_id,
+                        GenAISpanAttributes.GEN_AI_STEP_NUMBER: step.step_number,
+                        GenAISpanAttributes.GEN_AI_STEP_ACTION_TYPE: action_type_str,
+                        GenAISpanAttributes.GEN_AI_TOOL_NAME: step.tool_name,
+                        GenAISpanAttributes.GEN_AI_STEP_RATIONALE: step.rationale,
+                        GenAISpanAttributes.GEN_AI_STEP_IDEMPOTENCY_KEY: idempotency_key,
+                    },
+                ) as step_span:
+                    # Check if this effect has already been recorded
+                    if checkpoint is not None and checkpoint.has_effect(idempotency_key):
+                        logger.info(
+                            "Step %d (%s) already executed. Replaying from effect ledger.",
+                            step.step_number,
+                            step.tool_name,
+                        )
+                        set_span_attribute(
+                            step_span, GenAISpanAttributes.GEN_AI_STEP_REPLAYED, True
+                        )
+                        set_span_attribute(
+                            step_span, GenAISpanAttributes.GEN_AI_TOOL_STATUS, "replayed"
+                        )
+                        set_span_status(step_span, StatusCode.OK)
+                        cached_data = checkpoint.get_effect(idempotency_key) or {}
+                        cached_obs = ObservationPayload(
+                            call_id=f"{plan.plan_id}-step-{step.step_number}",
+                            success=True,
+                            output_data=cached_data,
+                            error_message=None,
+                            execution_time_ms=0.0,
+                        )
+                        step_results.append(cached_obs)
+                        continue
+
+                    set_span_attribute(step_span, GenAISpanAttributes.GEN_AI_STEP_REPLAYED, False)
+
+                    timeout = float(step.tool_args.get("timeout_seconds", 30.0))
+                    call_id = f"{plan.plan_id}-step-{step.step_number}"
+
+                    payload = ToolCallPayload(
+                        call_id=call_id,
+                        tool_name=step.tool_name,
+                        arguments=step.tool_args,
+                        timeout_seconds=timeout,
+                    )
+
+                    observation = await self.dispatcher.dispatch_tool_call(payload)
+                    step_results.append(observation)
+
+                    if not observation.success:
+                        elapsed = (time.perf_counter() - start_time) * 1000.0
+                        logger.warning(
+                            "Plan '%s' halted at step %d (%s) due to error: %s",
+                            plan.plan_id,
+                            step.step_number,
+                            step.tool_name,
+                            observation.error_message,
+                        )
+                        set_span_attribute(
+                            step_span, GenAISpanAttributes.GEN_AI_TOOL_STATUS, "error"
+                        )
+                        set_span_attribute(
+                            step_span,
+                            GenAISpanAttributes.ERROR_MESSAGE,
+                            observation.error_message or "",
+                        )
+                        set_span_status(
+                            step_span, StatusCode.ERROR, description=observation.error_message
+                        )
+
+                        set_span_attribute(
+                            plan_span, GenAISpanAttributes.GEN_AI_PLAN_STATUS, "failed"
+                        )
+                        set_span_attribute(
+                            plan_span, GenAISpanAttributes.GEN_AI_PLAN_DURATION_MS, elapsed
+                        )
+                        set_span_attribute(
+                            plan_span,
+                            GenAISpanAttributes.ERROR_MESSAGE,
+                            observation.error_message or "",
+                        )
+                        set_span_status(
+                            plan_span, StatusCode.ERROR, description=observation.error_message
+                        )
+
+                        if checkpoint is not None and checkpoint_manager is not None:
+                            checkpoint_manager.save_checkpoint(checkpoint)
+
+                        return AgentLoopResult(
+                            plan_id=plan.plan_id,
+                            success=False,
+                            step_results=step_results,
+                            final_output=None,
+                            error=observation.error_message,
+                            total_execution_time_ms=elapsed,
+                        )
+
+                    set_span_attribute(step_span, GenAISpanAttributes.GEN_AI_TOOL_STATUS, "success")
+                    set_span_status(step_span, StatusCode.OK)
+
+                    # Record effect on successful step
+                    if checkpoint is not None:
+                        checkpoint.record_effect(idempotency_key, observation.output_data)
+                        checkpoint.step_index = step.step_number
+                        checkpoint.turn_history.append(
+                            {
+                                "step": step.step_number,
+                                "action_type": action_type_str,
+                                "tool_name": step.tool_name,
+                                "output_data": observation.output_data,
+                            }
+                        )
+                        if checkpoint_manager is not None:
+                            checkpoint_manager.save_checkpoint(checkpoint)
+
+            elapsed = (time.perf_counter() - start_time) * 1000.0
+            final_output = step_results[-1].output_data if step_results else {}
+            logger.info("Plan '%s' completed successfully in %.2fms", plan.plan_id, elapsed)
+
+            set_span_attribute(plan_span, GenAISpanAttributes.GEN_AI_PLAN_STATUS, "success")
+            set_span_attribute(plan_span, GenAISpanAttributes.GEN_AI_PLAN_DURATION_MS, elapsed)
+            set_span_status(plan_span, StatusCode.OK)
+
+            return AgentLoopResult(
+                plan_id=plan.plan_id,
+                success=True,
+                step_results=step_results,
+                final_output=final_output,
+                error=None,
+                total_execution_time_ms=elapsed,
             )
-            idempotency_key = compute_idempotency_key(
-                action_type_str, step.tool_name, step.tool_args
-            )
-
-            # Check if this effect has already been recorded
-            if checkpoint is not None and checkpoint.has_effect(idempotency_key):
-                logger.info(
-                    "Step %d (%s) already executed. Replaying from effect ledger.",
-                    step.step_number,
-                    step.tool_name,
-                )
-                cached_data = checkpoint.get_effect(idempotency_key) or {}
-                cached_obs = ObservationPayload(
-                    call_id=f"{plan.plan_id}-step-{step.step_number}",
-                    success=True,
-                    output_data=cached_data,
-                    error_message=None,
-                    execution_time_ms=0.0,
-                )
-                step_results.append(cached_obs)
-                continue
-
-            timeout = float(step.tool_args.get("timeout_seconds", 30.0))
-            call_id = f"{plan.plan_id}-step-{step.step_number}"
-
-            payload = ToolCallPayload(
-                call_id=call_id,
-                tool_name=step.tool_name,
-                arguments=step.tool_args,
-                timeout_seconds=timeout,
-            )
-
-            observation = await self.dispatcher.dispatch_tool_call(payload)
-            step_results.append(observation)
-
-            if not observation.success:
-                elapsed = (time.perf_counter() - start_time) * 1000.0
-                logger.warning(
-                    "Plan '%s' halted at step %d (%s) due to error: %s",
-                    plan.plan_id,
-                    step.step_number,
-                    step.tool_name,
-                    observation.error_message,
-                )
-                if checkpoint is not None and checkpoint_manager is not None:
-                    checkpoint_manager.save_checkpoint(checkpoint)
-
-                return AgentLoopResult(
-                    plan_id=plan.plan_id,
-                    success=False,
-                    step_results=step_results,
-                    final_output=None,
-                    error=observation.error_message,
-                    total_execution_time_ms=elapsed,
-                )
-
-            # Record effect on successful step
-            if checkpoint is not None:
-                checkpoint.record_effect(idempotency_key, observation.output_data)
-                checkpoint.step_index = step.step_number
-                checkpoint.turn_history.append({
-                    "step": step.step_number,
-                    "action_type": action_type_str,
-                    "tool_name": step.tool_name,
-                    "output_data": observation.output_data,
-                })
-                if checkpoint_manager is not None:
-                    checkpoint_manager.save_checkpoint(checkpoint)
-
-        elapsed = (time.perf_counter() - start_time) * 1000.0
-        final_output = step_results[-1].output_data if step_results else {}
-        logger.info("Plan '%s' completed successfully in %.2fms", plan.plan_id, elapsed)
-
-        return AgentLoopResult(
-            plan_id=plan.plan_id,
-            success=True,
-            step_results=step_results,
-            final_output=final_output,
-            error=None,
-            total_execution_time_ms=elapsed,
-        )
 
     async def run_task(
         self,
@@ -345,4 +425,6 @@ class AgentLoop:
             steps=steps,
             thinking_process=thinking_process,
         )
-        return await self.run_plan(plan, checkpoint=checkpoint, checkpoint_manager=checkpoint_manager)
+        return await self.run_plan(
+            plan, checkpoint=checkpoint, checkpoint_manager=checkpoint_manager
+        )

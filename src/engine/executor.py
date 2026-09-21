@@ -20,6 +20,17 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from src.reasoning.schemas import ObservationPayload, ToolCallPayload
+from src.telemetry import (
+    AgentTelemetryTracer,
+    GenAISpanAttributes,
+    StatusCode,
+    record_span_exception,
+    set_span_attribute,
+    set_span_status,
+)
+from src.telemetry import (
+    tracer as default_tracer,
+)
 
 if TYPE_CHECKING:
     from src.athena.athena_client import AthenaClient
@@ -60,6 +71,7 @@ class ExecutiveEngineProcess:
         sandbox_engine: E2BSandboxEngine | None = None,
         retrieval_index: RetrievalIndex | None = None,
         authorized_tools: set[str] | None = None,
+        tracer: AgentTelemetryTracer | None = None,
     ) -> None:
         """Initialize the Executive Engine Process with default tools and allowlist.
 
@@ -73,12 +85,14 @@ class ExecutiveEngineProcess:
                 the standard system tools (ping, echo, athena_query, duckdb_query,
                 sandbox_execute, retrieval_search). If an empty set is passed, all tools
                 are denied by default.
+            tracer: Optional AgentTelemetryTracer instance for distributed tracing.
         """
         self._registry: dict[str, ToolHandlerCallable] = {}
         self._athena_client = athena_client
         self._duckdb_client = duckdb_client
         self._sandbox_engine = sandbox_engine
         self._retrieval_index = retrieval_index
+        self._tracer = tracer or default_tracer
 
         if authorized_tools is not None:
             self._authorized_tools: set[str] = set(authorized_tools)
@@ -134,6 +148,7 @@ class ExecutiveEngineProcess:
 
     def _register_default_handlers(self) -> None:
         """Register built-in tool handlers for system tasks, Athena, and Sandbox."""
+
         async def ping_handler(args: dict[str, Any]) -> dict[str, Any]:
             return {"status": "pong", "received_args": args}
 
@@ -144,6 +159,7 @@ class ExecutiveEngineProcess:
             client = self._athena_client
             if client is None:
                 from src.athena.athena_client import AthenaClient
+
                 client = AthenaClient()
                 self._athena_client = client
 
@@ -175,6 +191,7 @@ class ExecutiveEngineProcess:
             engine = self._sandbox_engine
             if engine is None:
                 from src.sandbox.e2b_sandbox import E2BSandboxEngine
+
                 engine = E2BSandboxEngine()
                 self._sandbox_engine = engine
 
@@ -210,6 +227,7 @@ class ExecutiveEngineProcess:
             client = self._duckdb_client
             if client is None:
                 from src.athena.duckdb_client import DuckDBClient
+
                 client = DuckDBClient()
                 self._duckdb_client = client
 
@@ -252,6 +270,7 @@ class ExecutiveEngineProcess:
             index = self._retrieval_index
             if index is None:
                 from src.rag.retrieval_index import RetrievalIndex
+
                 index = RetrievalIndex()
                 self._retrieval_index = index
 
@@ -265,7 +284,11 @@ class ExecutiveEngineProcess:
                         "'documents' list argument."
                     )
                 count = index.index_documents(documents)
-                return {"operation": "index", "indexed_count": count, "total_docs": index.document_count}
+                return {
+                    "operation": "index",
+                    "indexed_count": count,
+                    "total_docs": index.document_count,
+                }
 
             if operation == "clear":
                 index.clear()
@@ -294,6 +317,7 @@ class ExecutiveEngineProcess:
 
         Enforces explicit authorization allowlists, hard timeouts, and structured output parsing.
         Denies execution by default if the tool is not in the authorized allowlist.
+        Emits OpenTelemetry GenAI semantic convention spans for distributed tracing.
 
         Args:
             payload: Validated ToolCallPayload received from Cognitive Layer.
@@ -304,63 +328,105 @@ class ExecutiveEngineProcess:
         start_time = time.perf_counter()
         tool_name = payload.tool_name
 
-        # 1. Registry check
-        if tool_name not in self._registry:
-            elapsed = (time.perf_counter() - start_time) * 1000.0
-            logger.warning("Attempted invocation of unregistered tool: '%s'", tool_name)
-            return ObservationPayload(
-                call_id=payload.call_id,
-                success=False,
-                output_data={},
-                error_message=f"Unregistered executive tool: '{tool_name}'",
-                execution_time_ms=elapsed,
-            )
+        with self._tracer.start_span(
+            f"tool.execution.{tool_name}",
+            attributes={
+                GenAISpanAttributes.GEN_AI_SYSTEM: "athena-reasoning-sandbox",
+                GenAISpanAttributes.GEN_AI_OPERATION_NAME: "execute_tool",
+                GenAISpanAttributes.GEN_AI_TOOL_NAME: tool_name,
+                GenAISpanAttributes.GEN_AI_TOOL_CALL_ID: payload.call_id,
+                GenAISpanAttributes.GEN_AI_TOOL_TIMEOUT_SECONDS: payload.timeout_seconds,
+                GenAISpanAttributes.GEN_AI_TOOL_ARGUMENTS: payload.arguments,
+            },
+        ) as span:
+            # 1. Registry check
+            if tool_name not in self._registry:
+                elapsed = (time.perf_counter() - start_time) * 1000.0
+                err_msg = f"Unregistered executive tool: '{tool_name}'"
+                logger.warning("Attempted invocation of unregistered tool: '%s'", tool_name)
+                set_span_attribute(span, GenAISpanAttributes.GEN_AI_TOOL_STATUS, "unregistered")
+                set_span_attribute(span, GenAISpanAttributes.ERROR_TYPE, "UnregisteredToolError")
+                set_span_attribute(span, GenAISpanAttributes.ERROR_MESSAGE, err_msg)
+                set_span_status(span, StatusCode.ERROR, description=err_msg)
+                return ObservationPayload(
+                    call_id=payload.call_id,
+                    success=False,
+                    output_data={},
+                    error_message=err_msg,
+                    execution_time_ms=elapsed,
+                )
 
-        # 2. Authorization check (deny-by-default)
-        if not self.is_authorized(tool_name):
-            elapsed = (time.perf_counter() - start_time) * 1000.0
-            logger.warning("Unauthorized tool invocation attempted: '%s'", tool_name)
-            return ObservationPayload(
-                call_id=payload.call_id,
-                success=False,
-                output_data={},
-                error_message=f"Unauthorized tool execution: '{tool_name}' is not in the authorized tools allowlist.",
-                execution_time_ms=elapsed,
-            )
+            # 2. Authorization check (deny-by-default)
+            if not self.is_authorized(tool_name):
+                elapsed = (time.perf_counter() - start_time) * 1000.0
+                err_msg = (
+                    f"Unauthorized tool execution: '{tool_name}' is not in the "
+                    f"authorized tools allowlist."
+                )
+                logger.warning("Unauthorized tool invocation attempted: '%s'", tool_name)
+                set_span_attribute(span, GenAISpanAttributes.GEN_AI_TOOL_STATUS, "unauthorized")
+                set_span_attribute(span, GenAISpanAttributes.ERROR_TYPE, "UnauthorizedToolError")
+                set_span_attribute(span, GenAISpanAttributes.ERROR_MESSAGE, err_msg)
+                set_span_status(span, StatusCode.ERROR, description=err_msg)
+                return ObservationPayload(
+                    call_id=payload.call_id,
+                    success=False,
+                    output_data={},
+                    error_message=err_msg,
+                    execution_time_ms=elapsed,
+                )
 
-        handler = self._registry[tool_name]
+            handler = self._registry[tool_name]
 
-        try:
-            # 3. Enforce hard timeout execution safety
-            output_data = await asyncio.wait_for(
-                handler(payload.arguments),
-                timeout=payload.timeout_seconds,
-            )
-            elapsed = (time.perf_counter() - start_time) * 1000.0
-            return ObservationPayload(
-                call_id=payload.call_id,
-                success=True,
-                output_data=output_data,
-                error_message=None,
-                execution_time_ms=elapsed,
-            )
-        except asyncio.TimeoutError:
-            elapsed = (time.perf_counter() - start_time) * 1000.0
-            logger.error("Tool execution timed out after %.2fs: '%s'", payload.timeout_seconds, tool_name)
-            return ObservationPayload(
-                call_id=payload.call_id,
-                success=False,
-                output_data={},
-                error_message=f"Execution timed out after {payload.timeout_seconds} seconds.",
-                execution_time_ms=elapsed,
-            )
-        except Exception as exc:
-            elapsed = (time.perf_counter() - start_time) * 1000.0
-            logger.exception("Executive error executing tool '%s'", tool_name)
-            return ObservationPayload(
-                call_id=payload.call_id,
-                success=False,
-                output_data={},
-                error_message=f"{type(exc).__name__}: {exc!s}",
-                execution_time_ms=elapsed,
-            )
+            try:
+                # 3. Enforce hard timeout execution safety
+                output_data = await asyncio.wait_for(
+                    handler(payload.arguments),
+                    timeout=payload.timeout_seconds,
+                )
+                elapsed = (time.perf_counter() - start_time) * 1000.0
+                set_span_attribute(span, GenAISpanAttributes.GEN_AI_TOOL_STATUS, "success")
+                set_span_attribute(span, GenAISpanAttributes.GEN_AI_TOOL_EXECUTION_TIME_MS, elapsed)
+                set_span_status(span, StatusCode.OK)
+                return ObservationPayload(
+                    call_id=payload.call_id,
+                    success=True,
+                    output_data=output_data,
+                    error_message=None,
+                    execution_time_ms=elapsed,
+                )
+            except asyncio.TimeoutError:
+                elapsed = (time.perf_counter() - start_time) * 1000.0
+                err_msg = f"Execution timed out after {payload.timeout_seconds} seconds."
+                logger.error(
+                    "Tool execution timed out after %.2fs: '%s'",
+                    payload.timeout_seconds,
+                    tool_name,
+                )
+                set_span_attribute(span, GenAISpanAttributes.GEN_AI_TOOL_STATUS, "timeout")
+                set_span_attribute(span, GenAISpanAttributes.ERROR_TYPE, "TimeoutError")
+                set_span_attribute(span, GenAISpanAttributes.ERROR_MESSAGE, err_msg)
+                set_span_status(span, StatusCode.ERROR, description=err_msg)
+                return ObservationPayload(
+                    call_id=payload.call_id,
+                    success=False,
+                    output_data={},
+                    error_message=err_msg,
+                    execution_time_ms=elapsed,
+                )
+            except Exception as exc:
+                elapsed = (time.perf_counter() - start_time) * 1000.0
+                err_msg = f"{type(exc).__name__}: {exc!s}"
+                logger.exception("Executive error executing tool '%s'", tool_name)
+                record_span_exception(span, exc)
+                set_span_attribute(span, GenAISpanAttributes.GEN_AI_TOOL_STATUS, "error")
+                set_span_attribute(span, GenAISpanAttributes.ERROR_TYPE, type(exc).__name__)
+                set_span_attribute(span, GenAISpanAttributes.ERROR_MESSAGE, str(exc))
+                set_span_status(span, StatusCode.ERROR, description=err_msg)
+                return ObservationPayload(
+                    call_id=payload.call_id,
+                    success=False,
+                    output_data={},
+                    error_message=err_msg,
+                    execution_time_ms=elapsed,
+                )
