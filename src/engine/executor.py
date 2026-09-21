@@ -24,6 +24,7 @@ from src.reasoning.schemas import ObservationPayload, ToolCallPayload
 if TYPE_CHECKING:
     from src.athena.athena_client import AthenaClient
     from src.athena.duckdb_client import DuckDBClient
+    from src.rag.retrieval_index import RetrievalIndex
     from src.sandbox.e2b_sandbox import E2BSandboxEngine
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ DEFAULT_AUTHORIZED_TOOLS: set[str] = {
     "athena_query",
     "duckdb_query",
     "sandbox_execute",
+    "retrieval_search",
 }
 
 
@@ -56,6 +58,7 @@ class ExecutiveEngineProcess:
         athena_client: AthenaClient | None = None,
         duckdb_client: DuckDBClient | None = None,
         sandbox_engine: E2BSandboxEngine | None = None,
+        retrieval_index: RetrievalIndex | None = None,
         authorized_tools: set[str] | None = None,
     ) -> None:
         """Initialize the Executive Engine Process with default tools and allowlist.
@@ -64,14 +67,18 @@ class ExecutiveEngineProcess:
             athena_client: Optional AthenaClient instance for executing Athena queries.
             duckdb_client: Optional DuckDBClient instance for executing local analytical queries.
             sandbox_engine: Optional E2BSandboxEngine instance for executing sandboxed code.
+            retrieval_index: Optional RetrievalIndex for hybrid BM25 + dense document search.
+                If None, a default in-process index is created lazily on first use.
             authorized_tools: Optional set of authorized tool names. If None, defaults to
-                the standard system tools (ping, echo, athena_query, duckdb_query, sandbox_execute).
-                If an empty set is passed, all tools are denied by default.
+                the standard system tools (ping, echo, athena_query, duckdb_query,
+                sandbox_execute, retrieval_search). If an empty set is passed, all tools
+                are denied by default.
         """
         self._registry: dict[str, ToolHandlerCallable] = {}
         self._athena_client = athena_client
         self._duckdb_client = duckdb_client
         self._sandbox_engine = sandbox_engine
+        self._retrieval_index = retrieval_index
 
         if authorized_tools is not None:
             self._authorized_tools: set[str] = set(authorized_tools)
@@ -221,11 +228,66 @@ class ExecutiveEngineProcess:
                 dry_run=dry_run,
             )
 
+        async def retrieval_search_handler(args: dict[str, Any]) -> dict[str, Any]:
+            """Handle retrieval_search tool calls.
+
+            Supports three operations selected by the ``operation`` argument key:
+
+            * ``"search"`` (default) — query the index.  Required: ``query`` (str).
+              Optional: ``query_embedding`` (list[float]), ``top_k`` (int, default 5).
+            * ``"index"`` — add documents to the index.  Required: ``documents``
+              (list of dicts, each with ``doc_id`` and ``content`` keys).
+            * ``"clear"`` — remove all documents from the index.
+
+            Args:
+                args: Tool argument payload from the Parallax boundary.
+
+            Returns:
+                JSON-safe result dict for ObservationPayload.output_data.
+
+            Raises:
+                ValueError: On missing required arguments or empty index search.
+            """
+            # Lazy-init in-process index
+            index = self._retrieval_index
+            if index is None:
+                from src.rag.retrieval_index import RetrievalIndex
+                index = RetrievalIndex()
+                self._retrieval_index = index
+
+            operation = args.get("operation", "search")
+
+            if operation == "index":
+                documents = args.get("documents")
+                if not documents or not isinstance(documents, list):
+                    raise ValueError(
+                        "'retrieval_search' with operation='index' requires a non-empty "
+                        "'documents' list argument."
+                    )
+                count = index.index_documents(documents)
+                return {"operation": "index", "indexed_count": count, "total_docs": index.document_count}
+
+            if operation == "clear":
+                index.clear()
+                return {"operation": "clear", "total_docs": 0}
+
+            # Default: search
+            query = args.get("query")
+            if not query or not isinstance(query, str):
+                raise ValueError(
+                    "'retrieval_search' with operation='search' requires a non-empty 'query' string."
+                )
+            top_k = int(args.get("top_k", 5))
+            query_embedding: list[float] | None = args.get("query_embedding")
+            results = index.search(query=query, query_embedding=query_embedding, top_k=top_k)
+            return index.to_tool_result(results)
+
         self._registry["ping"] = ping_handler
         self._registry["echo"] = echo_handler
         self._registry["athena_query"] = athena_query_handler
         self._registry["duckdb_query"] = duckdb_query_handler
         self._registry["sandbox_execute"] = sandbox_execute_handler
+        self._registry["retrieval_search"] = retrieval_search_handler
 
     async def execute_tool_call(self, payload: ToolCallPayload) -> ObservationPayload:
         """Execute a tool call payload dispatched across the Parallax boundary.
