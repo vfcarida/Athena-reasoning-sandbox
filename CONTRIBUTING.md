@@ -34,6 +34,9 @@ source .venv/bin/activate
 # Upgrade pip and install development dependencies
 pip install --upgrade pip
 pip install -e ".[dev]"
+
+# Install git pre-commit hooks
+pre-commit install
 ```
 
 ---
@@ -56,10 +59,13 @@ pytest -m "not e2b and not network" -v --cov=src --cov-report=term-missing
 ruff check src evals tests
 
 # Run MyPy type checking
-mypy src/engine src/athena src/state src/sandbox
+mypy src/engine src/athena src/state src/sandbox src/rag src/telemetry
 
 # Run Bandit security scanning
 bandit -r src/ -x tests/ -s B105,B106,B615 -ll
+
+# Run pre-commit hooks manually on all files
+pre-commit run --all-files
 ```
 
 ---

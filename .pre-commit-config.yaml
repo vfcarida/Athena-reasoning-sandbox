@@ -1,0 +1,40 @@
+# Pre-commit configuration for Athena Reasoning Sandbox
+# See https://pre-commit.com for more information
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--unsafe]
+      - id: check-added-large-files
+        args: ["--maxkb=5000"]
+      - id: check-merge-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (core architecture)
+        entry: mypy
+        language: system
+        types: [python]
+        files: ^(src/engine|src/athena|src/state|src/sandbox|src/rag|src/telemetry)/
+        args: [src/engine, src/athena, src/state, src/sandbox, src/rag, src/telemetry]
+        pass_filenames: false
+
+      - id: bandit
+        name: bandit (security scanner)
+        entry: bandit
+        language: system
+        types: [python]
+        files: ^src/
+        args: [-r, src/, -x, tests/, -s, "B105,B106,B615", -ll]
+        pass_filenames: false
