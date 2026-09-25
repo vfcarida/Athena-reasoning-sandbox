@@ -61,10 +61,11 @@ dev = [
     "deepeval>=0.21.0",
 ]
 eval = ["deepeval>=0.21.0"]
+docs = ["mkdocs-material>=9.5.0", "mkdocstrings[python]>=0.24.0"]
 quantization = ["bitsandbytes>=0.41.0"]
 logging = ["wandb>=0.16.0", "tensorboard>=2.15.0"]
 bench = ["agent-bench"]
-all = ["athena-reasoning-sandbox[ml,quantization,logging,dev,eval]"]
+all = ["athena-reasoning-sandbox[ml,quantization,logging,dev,eval,docs]"]
 
 [project.scripts]
 athena-agent = "src.main:main"

@@ -1,0 +1,56 @@
+site_name: Athena Reasoning Sandbox
+site_description: Production-Grade, FinOps-Governed Autonomous Data Lake Agent Framework
+site_author: Vinicius Caridá
+site_url: https://github.com/vfcarida/Athena-reasoning-sandbox
+repo_url: https://github.com/vfcarida/Athena-reasoning-sandbox
+repo_name: vfcarida/Athena-reasoning-sandbox
+
+theme:
+  name: material
+  language: en
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - def_list
+
+nav:
+  - Overview: index.md
+  - Guides:
+      - Quickstart Guide: guides/quickstart.md
+  - Architecture:
+      - Cognitive-Executive Separation: architecture/overview.md
+      - ADR-0001 Agent Loop Wiring: adr/0001-agent-loop-wiring.md
+  - Technical Baseline:
+      - Baseline & Test Lanes: BASELINE.md
+      - Model Merging (Neuro-Fusion): MERGING.md
