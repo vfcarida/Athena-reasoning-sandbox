@@ -504,6 +504,13 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List available demo groups and exit.",
     )
+    parser.add_argument(
+        "--mcp",
+        "--mcp-serve",
+        action="store_true",
+        dest="mcp",
+        help="Run Athena as a Model Context Protocol (MCP) JSON-RPC 2.0 stdio server.",
+    )
     return parser
 
 
@@ -518,6 +525,12 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.mcp:
+        from src.engine.mcp_server import run_mcp_server
+
+        run_mcp_server()
+        return 0
 
     if args.list:
         print("\nAvailable demos:\n")

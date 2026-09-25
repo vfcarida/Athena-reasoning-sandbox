@@ -66,6 +66,9 @@ logging = ["wandb>=0.16.0", "tensorboard>=2.15.0"]
 bench = ["agent-bench"]
 all = ["athena-reasoning-sandbox[ml,quantization,logging,dev,eval]"]
 
+[project.scripts]
+athena-agent = "src.main:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
 
