@@ -35,7 +35,7 @@ jobs:
 
       - name: Run MyPy Type Checker on Core Architecture
         run: |
-          mypy src/engine src/athena src/state src/sandbox
+          mypy src/engine src/athena src/state src/sandbox src/rag src/telemetry
 
   unit-tests-and-coverage:
     name: Unit Tests & Code Coverage Gate (Lane 1 >= 48%)

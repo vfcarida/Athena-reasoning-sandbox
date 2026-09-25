@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from deepeval.metrics import FaithfulnessMetric
 from deepeval.test_case import LLMTestCase
@@ -214,7 +214,7 @@ class HybridSearchEngine:
         test_case = LLMTestCase(
             input=query,
             actual_output=actual_output,
-            retrieval_context=retrieved_contexts,
+            retrieval_context=cast(Any, retrieved_contexts),
         )
         metric = FaithfulnessMetric(threshold=threshold)
         score = metric.measure(test_case)

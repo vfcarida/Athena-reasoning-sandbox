@@ -131,6 +131,7 @@ class AutonomousDataAgent:
         dialect = "duckdb" if self.backend == "duckdb" else "trino"
         cleaned = original_sql.strip().rstrip(";").strip()
 
+        ast: Any = None
         try:
             ast = sqlglot.parse_one(cleaned, read=dialect)
         except Exception:
