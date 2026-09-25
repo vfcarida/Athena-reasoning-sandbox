@@ -4,6 +4,17 @@ Athena Reasoning Sandbox provides an enterprise-grade, FinOps-governed autonomou
 
 ```mermaid
 graph TB
+    subgraph Clients["External MCP Clients & IDEs"]
+        Claude["Claude Desktop / Cursor"]
+        CustomAgent["LangChain / External Agents"]
+    end
+
+    subgraph MCP["Model Context Protocol Gateway"]
+        MCPServer["AthenaMCPServer (JSON-RPC 2.0)"]
+        Claude -->|stdio| MCPServer
+        CustomAgent -->|JSON-RPC| MCPServer
+    end
+
     subgraph CognitiveLayer["Cognitive Reasoning Layer"]
         LLM["Planner / LLM Reasoning Loop"]
         Schema["Pydantic Schema Validator"]
@@ -13,6 +24,7 @@ graph TB
     subgraph Boundary["Parallax Security Boundary"]
         Dispatcher["ParallaxToolDispatcher"]
         Schema -->|ToolCallPayload| Dispatcher
+        MCPServer -->|ToolCallPayload| Dispatcher
     end
 
     subgraph ExecutiveLayer["Executive Engine Process"]
@@ -26,13 +38,14 @@ graph TB
         Guard["AthenaQueryGuard (sqlglot AST)"]
         Router -->|SQL Query| Guard
         Guard -->|AST Validated| EngineChoice{"Backend Choice"}
-        Guard -->|Rejection| Reflection["Multi-Turn Reflection Cycle"]
+        Guard -->|Rejection| Reflection["Multi-Turn Reflection Cycle (sqlglot)"]
         Reflection -->|Refined SQL| LLM
     end
 
     subgraph ExecutionBackends["Execution Engines"]
         EngineChoice -->|Local Offline| DuckDB["DuckDBClient (In-Memory / Parquet)"]
         EngineChoice -->|Cloud Analytical| Athena["AthenaClient (WorkGroup / Cutoff)"]
+        EngineChoice -->|Document Store| RAG["RetrievalIndex (BM25 + Dense RRF)"]
         EngineChoice -->|Code Execution| Sandbox["E2BSandboxEngine (Isolated)"]
     end
 
@@ -49,7 +62,7 @@ graph TB
 In conventional agent architectures, the LLM reasoning process frequently executes tools with arbitrary host privileges, risking accidental command execution, resource exhaustion, or credential leakage.
 
 Athena enforces strict **Cognitive-Executive Separation**:
-- **Cognitive Layer**: Responsible strictly for planning, reasoning (<think> traces), and output formulation. It operates in an unprivileged runtime and cannot execute arbitrary OS calls.
+- **Cognitive Layer**: Responsible strictly for planning, reasoning (`<think>` traces), and output formulation. It operates in an unprivileged runtime and cannot execute arbitrary OS calls.
 - **Parallax Dispatcher**: Receives typed, frozen `ToolCallPayload` objects and dispatches them across an in-process or HTTP boundary.
 - **Executive Engine**: Enforces an explicit, deny-by-default allowlist (`authorized_tools`), executes verified actions with hard timeouts, and returns structured `ObservationPayload` objects.
 
@@ -67,17 +80,29 @@ The `AthenaQueryGuard` uses `sqlglot` to parse generated SQL queries into an Abs
 
 ---
 
-## 3. Multi-Turn Adaptive Reflection
+## 3. Multi-Turn Adaptive Reflection with AST Rewriting
 
 When an agent proposes an analytical query that fails FinOps governance, the `AutonomousDataAgent` does not abort or execute blindly. Instead, it enters an internal reflection cycle:
 - Parses the rejection error (e.g., missing partition or unbounded projection).
 - Synthesizes a structured reflection thought (`<think> Reflection: ... </think>`).
-- Programmatically repairs the query by injecting partition filters, restricting column projections, or appending limits.
+- Performs **AST-driven SQL rewriting** using `sqlglot` transformations:
+  - Synthesizes and appends partition equality predicates (`dt = '2026-09-01'`) into existing or newly synthesized `WHERE` clauses.
+  - Replaces `exp.Star` wildcard nodes with bounded, explicit column projections (`order_id, amount`).
+  - Appends bounded `LIMIT 100` clauses.
 - Resubmits the repaired query up to `max_reflection_turns`.
 
 ---
 
-## 4. Conversation State Checkpointing & Idempotency
+## 4. Model Context Protocol (MCP) Integration
+
+Athena includes a native **Model Context Protocol (MCP)** server adapter (`AthenaMCPServer`) compliant with JSON-RPC 2.0:
+- Exposes registered tools (`duckdb_query`, `athena_query`, `retrieval_search`, `sandbox_execute`, `ping`, `echo`) with JSON Schema reflection.
+- Operates over stdio via `athena-agent --mcp`, allowing instant connectivity from IDEs and external agents (Claude Desktop, Cursor, LangChain).
+- Respects the Executive deny-by-default authorization allowlist, ensuring external callers cannot invoke unauthorized system actions.
+
+---
+
+## 5. Conversation State Checkpointing & Idempotency
 
 Agent loops that encounter transient network failures or retries risk re-executing non-idempotent operations. Athena features `ConversationCheckpointManager`:
 - **State Snapshotting**: Captures conversation history, tool memory, and turn sequences in JSON.
