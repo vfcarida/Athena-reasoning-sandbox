@@ -144,6 +144,7 @@ class AutonomousDataAgent:
         error_message: str,
         default_partition_key: str = "dt",
         default_partition_val: str = "2026-09-01",
+        table_schema: list[dict[str, Any]] | None = None,
     ) -> tuple[str, str]:
         """Reflect upon a FinOps rejection and synthesize a compliant SQL statement via AST rewriting.
 
@@ -155,6 +156,7 @@ class AutonomousDataAgent:
             error_message: Error text from FinOps guard or execution engine.
             default_partition_key: Column name to use for partition pruning (default "dt").
             default_partition_val: Partition value literal (default "2026-09-01").
+            table_schema: Optional list of discovered column metadata dicts.
 
         Returns:
             Tuple of (refined_sql, reasoning_reflection_thought).
@@ -168,17 +170,29 @@ class AutonomousDataAgent:
         except Exception:
             ast = None
 
+        discovered_columns: list[str] = []
+        discovered_partition_key: str = default_partition_key
+
+        if table_schema:
+            for col in table_schema:
+                col_name = str(col.get("column_name") or col.get("name") or "")
+                if col_name:
+                    discovered_columns.append(col_name)
+                if col.get("is_partition"):
+                    discovered_partition_key = col_name
+
         # 1. Reflection on missing partition filter
         if "WHERE clause" in error_message or "partition filter" in error_message or "partition" in error_message.lower():
+            partition_key_to_use = discovered_partition_key or default_partition_key
             thought = (
                 f"<think> Reflection: The query was rejected because it omits partition pruning "
-                f"on column '{default_partition_key}'. Scans on analytical data lakes require "
+                f"on column '{partition_key_to_use}'. Scans on analytical data lakes require "
                 f"explicit partition bounding to avoid full table scans ($5/TB risk). "
-                f"Appending partition filter: WHERE {default_partition_key} = '{default_partition_val}'. </think>"
+                f"Appending partition filter: WHERE {partition_key_to_use} = '{default_partition_val}'. </think>"
             )
             if ast is not None:
                 partition_pred = exp.EQ(
-                    this=exp.to_column(default_partition_key),
+                    this=exp.to_column(partition_key_to_use),
                     expression=exp.Literal.string(default_partition_val),
                 )
                 ast = ast.where(partition_pred, append=True)
@@ -187,20 +201,29 @@ class AutonomousDataAgent:
                 if re.search(r"\bWHERE\b", cleaned, flags=re.IGNORECASE):
                     refined = re.sub(
                         r"\bWHERE\b",
-                        f"WHERE {default_partition_key} = '{default_partition_val}' AND",
+                        f"WHERE {partition_key_to_use} = '{default_partition_val}' AND",
                         cleaned,
                         count=1,
                         flags=re.IGNORECASE,
                     )
                 else:
-                    refined = f"{cleaned} WHERE {default_partition_key} = '{default_partition_val}'"
+                    refined = f"{cleaned} WHERE {partition_key_to_use} = '{default_partition_val}'"
 
         # 2. Reflection on unbounded SELECT *
         elif "Unbounded 'SELECT *" in error_message or "Unbounded projection" in error_message or "SELECT *" in error_message:
+            # Determine projection columns from discovered schema or fallback
+            if table_schema and all(c in discovered_columns for c in ["order_id", "amount"]):
+                projection_cols = ["order_id", "amount"]
+            elif table_schema and discovered_columns:
+                projection_cols = [c for c in discovered_columns if c != discovered_partition_key][:5]
+            else:
+                projection_cols = ["order_id", "amount"]
+
+            cols_str = ", ".join(projection_cols[:5])
             thought = (
-                "<think> Reflection: The query was rejected due to an unbounded 'SELECT *' projection. "
-                "Columnar storage engines scan every column block in SELECT *. "
-                "Restricting projection to explicit columns: 'order_id, amount'. </think>"
+                f"<think> Reflection: The query was rejected due to an unbounded 'SELECT *' projection. "
+                f"Columnar storage engines scan every column block in SELECT *. "
+                f"Restricting projection to explicit columns: '{cols_str}'. </think>"
             )
             if ast is not None:
                 # Replace Star nodes in select expressions
@@ -210,20 +233,29 @@ class AutonomousDataAgent:
                         isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star)
                     )
                     if is_star:
-                        new_exprs.extend([
-                            exp.to_column("order_id"),
-                            exp.to_column("amount"),
-                        ])
+                        new_exprs.extend([exp.to_column(col) for col in projection_cols[:5]])
                     else:
                         new_exprs.append(expr)
                 if not new_exprs:
-                    new_exprs = [exp.to_column("order_id"), exp.to_column("amount")]
+                    new_exprs = [exp.to_column(col) for col in projection_cols[:5]]
                 ast.set("expressions", new_exprs)
                 refined = ast.sql(dialect=dialect)
             else:
-                refined = re.sub(r"SELECT\s+\*", "SELECT order_id, amount", cleaned, count=1, flags=re.IGNORECASE)
+                refined = re.sub(r"SELECT\s+\*", f"SELECT {cols_str}", cleaned, count=1, flags=re.IGNORECASE)
 
-        # 3. Reflection on missing LIMIT
+        # 3. Reflection on budget / cost exceeded
+        elif "cost exceeded" in error_message.lower() or "budget" in error_message.lower():
+            thought = (
+                "<think> Reflection: Query projected cost exceeds FinOps budget limit. "
+                "Applying tighter partition constraint and appending LIMIT 50 to bound scan. </think>"
+            )
+            if ast is not None:
+                ast = ast.limit(50)
+                refined = ast.sql(dialect=dialect)
+            else:
+                refined = f"{cleaned} LIMIT 50"
+
+        # 4. Reflection on missing LIMIT
         elif "LIMIT" in error_message:
             thought = (
                 "<think> Reflection: Query lacks an explicit LIMIT clause. "
@@ -331,11 +363,23 @@ class AutonomousDataAgent:
             logger.warning("Turn %d failed with error: %s", turn, last_error)
 
             if turn < self.max_reflection_turns:
+                # Pre-discover schema if AST identifies a target table
+                table_schema: list[dict[str, Any]] | None = None
+                try:
+                    dialect = "duckdb" if self.backend == "duckdb" else "trino"
+                    parsed_ast = sqlglot.parse_one(current_sql, read=dialect)
+                    tbl_node = parsed_ast.find(exp.Table) if parsed_ast else None
+                    if tbl_node and tbl_node.name:
+                        table_schema = await self.discover_schema(tbl_node.name)
+                except Exception:
+                    table_schema = None
+
                 # Enter reflection mode and refine query
                 refined_sql, reflection_thought = self._reflect_and_refine_sql(
                     original_sql=current_sql,
                     error_message=last_error,
                     default_partition_key=(required_partition_keys[0] if required_partition_keys else "dt"),
+                    table_schema=table_schema,
                 )
                 thinking_log.append(reflection_thought)
                 current_sql = refined_sql

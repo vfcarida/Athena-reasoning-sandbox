@@ -28,6 +28,7 @@ from src.athena.athena_client import (
 )
 from src.athena.query_guard import (
     AthenaQueryGuard,
+    QueryCostExceededError,
     UnboundedSelectError,
     UnpartitionedQueryError,
 )
@@ -545,5 +546,23 @@ def test_estimate_query_cost_metrics():
     assert cost_part["projected_cost_usd"] >= 0.0
     assert cost_part["projection_ratio"] < 1.0
     assert cost_part["cost_tier"] in ("LOW", "MEDIUM")
+
+
+def test_max_cost_usd_budget_enforcement():
+    """Verify that validate_query raises QueryCostExceededError when budget is breached."""
+    guard = AthenaQueryGuard(dialect="duckdb", max_cost_usd=0.0001)
+    # 50TB unpartitioned table projection
+    sql = "SELECT order_id, amount FROM large_events WHERE dt = '2026-09-01' LIMIT 100;"
+    with pytest.raises(QueryCostExceededError, match="exceeds the configured budget limit"):
+        guard.validate_query(sql, table_size_bytes=50 * 1024**4)
+
+
+def test_max_cost_usd_budget_accepted():
+    """Verify that validate_query succeeds when estimated cost is within budget."""
+    guard = AthenaQueryGuard(dialect="duckdb", max_cost_usd=1.0)
+    sql = "SELECT order_id, amount FROM events WHERE dt = '2026-09-01' LIMIT 100;"
+    # 100MB table
+    guard.validate_query(sql, table_size_bytes=100 * 1024 * 1024)
+
 
 

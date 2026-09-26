@@ -153,27 +153,51 @@ Agents should not guess table columns. Athena provides native schema discovery a
 
 ---
 
+## 🛑 FinOps Soft Budget Enforcement
+
+In addition to structural AST validation, `AthenaQueryGuard` supports an optional maximum estimated cost threshold (`max_cost_usd`):
+
+```python
+from src.athena.query_guard import AthenaQueryGuard, QueryCostExceededError
+
+guard = AthenaQueryGuard(dialect="trino", max_cost_usd=0.50)  # Max $0.50 per query
+
+# If a query exceeds $0.50 projected scan, it raises QueryCostExceededError
+try:
+    guard.validate_query(
+        "SELECT order_id, amount FROM huge_table WHERE dt = '2026-09-01' LIMIT 100",
+        table_size_bytes=50 * 1024**4,  # 50 TB dataset
+    )
+except QueryCostExceededError as err:
+    print(f"Blocked by FinOps Budget Guard: {err}")
+```
+
+---
+
 ## 🔄 Self-Healing Multi-Turn Reflection
 
-If an LLM agent produces an invalid query (e.g. `SELECT * FROM orders`), Athena does not crash. It leverages `sqlglot` AST rewriting:
+If an LLM agent produces an invalid or unbudgeted query (e.g. `SELECT * FROM users`), Athena does not crash. It leverages `sqlglot` AST rewriting with dynamic schema awareness:
 
 ```
-[Agent Output]  SELECT * FROM orders
+[Agent Output]  SELECT * FROM users
        │
        ▼
-[QueryGuard]    ❌ StarProjectionError: Wildcard '*' not allowed
+[QueryGuard]    ❌ UnboundedSelectError: Wildcard '*' not allowed
+       │
+       ▼
+[Schema Probe]  Agent dynamically introspects 'users' schema:
+                columns: [user_uuid, email, dt]
        │
        ▼
 [Reflection]    Agent synthesizes `<think>` reflection trace.
        │
        ▼
-[AST Rewriter]  - Discovers table schema
-                - Replaces exp.Star with explicit columns (e.g. order_id, amount)
+[AST Rewriter]  - Replaces exp.Star with discovered columns: 'user_uuid, email'
                 - Injects WHERE dt = '2026-09-01'
                 - Injects LIMIT 100
        │
        ▼
-[QueryGuard]    ✅ AST Validated -> Dispatched to Engine
+[QueryGuard]    ✅ AST Validated -> Dispatched across Parallax Boundary
 ```
 
 This ensures zero runaway queries reach the cloud data lake while maintaining autonomous agent self-direction.

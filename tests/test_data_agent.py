@@ -199,3 +199,33 @@ async def test_data_agent_discover_schema(test_duckdb_client: DuckDBClient):
     assert "order_id" in col_names
     assert "amount" in col_names
     assert "dt" in col_names
+
+
+@pytest.mark.asyncio
+async def test_data_agent_reflects_custom_table_schema(test_duckdb_client: DuckDBClient):
+    """Ensure agent dynamically projects columns from custom table schema rather than hardcoding."""
+    test_duckdb_client.con.execute(
+        "CREATE TABLE users (user_uuid VARCHAR, email VARCHAR, dt VARCHAR);"
+    )
+    test_duckdb_client.con.execute(
+        "INSERT INTO users VALUES ('u1', 'alice@example.com', '2026-09-01');"
+    )
+
+    agent = AutonomousDataAgent(
+        backend="duckdb",
+        duckdb_client=test_duckdb_client,
+        max_reflection_turns=3,
+    )
+
+    summary = await agent.run(
+        goal="Select user data",
+        initial_sql="SELECT * FROM users LIMIT 10;",
+        required_partition_keys=["dt"],
+    )
+
+    assert summary.success is True
+    assert summary.result_data.get("row_count") == 1
+    assert "user_uuid" in summary.final_sql
+    assert "email" in summary.final_sql
+    assert "dt = '2026-09-01'" in summary.final_sql
+

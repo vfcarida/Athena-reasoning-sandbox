@@ -36,6 +36,10 @@ class UnboundedSelectError(Exception):
     """Raised when a SQL query uses SELECT * or omits mandatory projection and LIMIT bounds."""
 
 
+class QueryCostExceededError(Exception):
+    """Raised when estimated query cost exceeds the configured FinOps budget limit."""
+
+
 class AthenaQueryGuard:
     """AST-based pre-execution SQL guard enforcing AWS Athena FinOps compliance.
 
@@ -73,15 +77,18 @@ class AthenaQueryGuard:
         self,
         default_partition_keys: set[str] | None = None,
         dialect: str = "trino",
+        max_cost_usd: float | None = None,
     ) -> None:
         """Initialize the Athena Query Guard.
 
         Args:
             default_partition_keys: Optional set of default partition column names.
             dialect: Default SQL dialect for parsing (default "trino").
+            max_cost_usd: Optional maximum estimated cost in USD allowed per query.
         """
         self.partition_keys = default_partition_keys or self.DEFAULT_PARTITION_KEYS
         self.dialect = dialect
+        self.max_cost_usd = max_cost_usd
 
     def is_metadata_query(self, query: str) -> bool:
         """Check whether a query is a metadata discovery or execution plan operation.
@@ -368,6 +375,9 @@ class AthenaQueryGuard:
         query: str,
         required_partition_keys: list[str] | None = None,
         enforce_limit: bool = True,
+        max_cost_usd: float | None = None,
+        table_size_bytes: int = 1_000_000_000,
+        total_columns: int = 20,
     ) -> None:
         """Execute full AST validation suite on target SQL query.
 
@@ -375,10 +385,14 @@ class AthenaQueryGuard:
             query: Raw SQL query string.
             required_partition_keys: List of partition column names.
             enforce_limit: Whether to check for LIMIT clause.
+            max_cost_usd: Optional override for maximum allowable estimated cost in USD.
+            table_size_bytes: Estimated baseline table unpartitioned size for cost check.
+            total_columns: Estimated table column count for cost check.
 
         Raises:
             UnpartitionedQueryError: If partition keys missing in WHERE clause.
             UnboundedSelectError: If SELECT * used or LIMIT missing.
+            QueryCostExceededError: If estimated cost exceeds configured max_cost_usd.
         """
         if self.is_metadata_query(query):
             logger.info(
@@ -389,6 +403,21 @@ class AthenaQueryGuard:
 
         self.validate_partition_filter(query, required_partition_keys)
         self.validate_projections_and_limits(query, enforce_limit=enforce_limit)
+
+        budget_limit = max_cost_usd if max_cost_usd is not None else self.max_cost_usd
+        if budget_limit is not None:
+            estimate = self.estimate_query_cost(
+                query=query,
+                table_size_bytes=table_size_bytes,
+                total_columns=total_columns,
+            )
+            if estimate["projected_cost_usd"] > budget_limit:
+                raise QueryCostExceededError(
+                    f"Athena FinOps Error: Query projected cost ${estimate['projected_cost_usd']:.4f} USD "
+                    f"exceeds the configured budget limit of ${budget_limit:.4f} USD. "
+                    f"(Estimated Scan: {estimate['projected_scan_bytes'] / (1024**3):.2f} GB)"
+                )
+
         logger.info("SQL query passed Athena FinOps AST cost validation: '%s'", query[:60])
 
     @staticmethod
@@ -417,4 +446,5 @@ __all__ = [
     "QueryCostGuard",
     "UnpartitionedQueryError",
     "UnboundedSelectError",
+    "QueryCostExceededError",
 ]
