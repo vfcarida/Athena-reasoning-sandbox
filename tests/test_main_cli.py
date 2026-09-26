@@ -100,6 +100,20 @@ class TestEng02DemoCheckpoint:
         assert "Checkpoint" in out or "step" in out.lower() or "\u2713" in out
 
 
+class TestEng02DemoMcp:
+    """Verify --demo mcp runs without crashing."""
+
+    def test_mcp_demo_exits_zero(self, capsys: pytest.CaptureFixture[str]) -> None:
+        code, _, _ = _run(["--demo", "mcp"], capsys)
+        assert code == 0
+
+    def test_mcp_demo_prints_handshake_and_tool_info(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _code, out, _ = _run(["--demo", "mcp"], capsys)
+        assert "Model Context Protocol" in out or "MCP Server simulation" in out
+        assert "duckdb_query" in out
+        assert "\u2713" in out
+
+
 # ---------------------------------------------------------------------------
 # ENG-02-C: ML demo graceful skip when torch absent
 # ---------------------------------------------------------------------------

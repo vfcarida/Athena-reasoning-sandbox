@@ -266,6 +266,123 @@ def demo_checkpoint() -> None:
 
 
 # =============================================================================
+# Demo — Model Context Protocol (MCP) Adapter (Tier 1, offline)
+# =============================================================================
+
+def demo_mcp() -> None:
+    """Demonstrate the Model Context Protocol (MCP) server adapter.
+
+    Simulates an external client interacting with Athena via JSON-RPC 2.0:
+    1. 'initialize' protocol handshake and capability negotiation.
+    2. 'notifications/initialized' acknowledgment.
+    3. 'tools/list' tool catalog inspection with schema reflection.
+    4. 'tools/call' for 'duckdb_query' with FinOps partition pruning.
+    5. 'tools/call' for 'retrieval_search' with document indexing and hybrid search.
+    """
+    header("DEMO: Model Context Protocol (MCP) Server Adapter — JSON-RPC 2.0")
+
+    from src.athena.duckdb_client import DuckDBClient
+    from src.engine.executor import ExecutiveEngineProcess
+    from src.engine.mcp_server import AthenaMCPServer
+    from src.rag.retrieval_index import RetrievalIndex
+
+    sub("Initializing Athena MCP Server with DuckDB & Hybrid RAG")
+    db_client = DuckDBClient(database=":memory:")
+    db_client.con.execute("""
+        CREATE TABLE cloud_billing (
+            service VARCHAR,
+            cost_usd DOUBLE,
+            dt VARCHAR
+        );
+        INSERT INTO cloud_billing VALUES
+            ('Amazon S3', 142.50, '2026-09-01'),
+            ('AWS Athena', 38.20, '2026-09-01'),
+            ('AWS Glue', 19.80, '2026-09-01');
+    """)
+    retrieval_index = RetrievalIndex()
+    executor = ExecutiveEngineProcess(duckdb_client=db_client, retrieval_index=retrieval_index)
+    mcp_server = AthenaMCPServer(executor=executor)
+
+    sub("1. Protocol Handshake ('initialize' & 'notifications/initialized')")
+    init_req = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "athena-cli-simulation", "version": "1.0.0"},
+        },
+    }
+    init_res = asyncio.run(mcp_server.handle_message(init_req))
+    metric("Negotiated Protocol", init_res["result"]["protocolVersion"] if init_res and "result" in init_res else "None")
+    metric("Server Identity", init_res["result"]["serverInfo"]["name"] if init_res and "result" in init_res else "None")
+
+    asyncio.run(mcp_server.handle_message({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+    metric("Client Initialized", "Acknowledged")
+
+    sub("2. Tool Catalog Inspection ('tools/list')")
+    list_req = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+    list_res = asyncio.run(mcp_server.handle_message(list_req))
+    tools = list_res["result"]["tools"] if list_res and "result" in list_res else []
+    metric("Exposed Tools Count", len(tools))
+    for t in tools:
+        metric(f"  Tool: {t['name']}", t["description"][:50] + "…")
+
+    sub("3. Tool Execution via MCP ('tools/call' -> duckdb_query)")
+    query_call = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "duckdb_query",
+            "arguments": {
+                "query": "SELECT service, cost_usd FROM cloud_billing WHERE dt = '2026-09-01' LIMIT 5;"
+            },
+        },
+    }
+    query_res = asyncio.run(mcp_server.handle_message(query_call))
+    if query_res and "result" in query_res:
+        content = query_res["result"]["content"][0]["text"]
+        metric("Call Success", not query_res["result"].get("isError", False))
+        metric("Result Rows", content[:60] + "…")
+
+    sub("4. Tool Execution via MCP ('tools/call' -> retrieval_search)")
+    index_call = {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "retrieval_search",
+            "arguments": {
+                "op": "index",
+                "documents": [
+                    {"doc_id": "guide-1", "content": "FinOps Best Practices: Always enforce partition pruning."},
+                    {"doc_id": "guide-2", "content": "AWS Athena pricing charges $5 per TB scanned."},
+                ],
+            },
+        },
+    }
+    asyncio.run(mcp_server.handle_message(index_call))
+
+    search_call = {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "retrieval_search",
+            "arguments": {"op": "search", "query": "Athena pricing per TB", "top_k": 1},
+        },
+    }
+    search_res = asyncio.run(mcp_server.handle_message(search_call))
+    if search_res and "result" in search_res:
+        search_text = search_res["result"]["content"][0]["text"]
+        metric("RAG Hit", search_text[:60] + "…")
+
+    ok("MCP Server simulation demo complete.")
+
+
+# =============================================================================
 # Demo — ML Tier 2 (requires [ml] extras)
 # =============================================================================
 
@@ -429,7 +546,7 @@ def _demo_merging_and_reasoning() -> None:
     summary = result.summary()
     metric("Total tokens", summary["total_tokens"])
     metric("Thinking tokens", summary["thinking_tokens"], C.Y)
-    ot = overthinking_index(summary["thinking_tokens"], summary["total_tokens"])
+    ot = overthinking_index(int(summary["thinking_tokens"]), int(summary["total_tokens"]))
     metric("Efficiency", f"{ot['efficiency_score']:.4f}", C.G)
     ok("Merging + SwiReasoning demo complete.")
 
@@ -458,6 +575,7 @@ DEMO_MAP: dict[str, tuple[str, object]] = {
     "agent": ("AutonomousDataAgent (multi-turn SQL reflection, offline)", demo_agent),
     "retrieval": ("RetrievalSearch (hybrid BM25+dense via Parallax boundary, offline)", demo_retrieval),
     "checkpoint": ("ConversationCheckpointManager (idempotency, offline)", demo_checkpoint),
+    "mcp": ("Model Context Protocol (MCP JSON-RPC 2.0 simulation, offline)", demo_mcp),
     "ml": ("ML demos: pretraining / fine-tuning / merging (requires [ml] extras)", demo_ml),
 }
 
@@ -550,6 +668,7 @@ def main(argv: list[str] | None = None) -> int:
             ("agent", demo_agent),
             ("retrieval", demo_retrieval),
             ("checkpoint", demo_checkpoint),
+            ("mcp", demo_mcp),
         ]
 
     exit_code = 0
