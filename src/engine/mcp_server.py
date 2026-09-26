@@ -140,6 +140,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                         "required": ["doc_id", "content"],
                     },
                 },
+                "filter_metadata": {
+                    "type": "object",
+                    "description": "Optional key-value metadata dictionary to filter search results.",
+                },
             },
         },
     },

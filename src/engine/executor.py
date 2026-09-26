@@ -364,7 +364,13 @@ class ExecutiveEngineProcess:
                 )
             top_k = int(args.get("top_k", 5))
             query_embedding: list[float] | None = args.get("query_embedding")
-            results = index.search(query=query, query_embedding=query_embedding, top_k=top_k)
+            filter_metadata: dict[str, Any] | None = args.get("filter_metadata") or args.get("filter")
+            results = index.search(
+                query=query,
+                query_embedding=query_embedding,
+                top_k=top_k,
+                filter_metadata=filter_metadata,
+            )
             return index.to_tool_result(results)
 
         async def describe_table_handler(args: dict[str, Any]) -> dict[str, Any]:

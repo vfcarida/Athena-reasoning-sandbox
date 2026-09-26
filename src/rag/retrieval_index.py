@@ -207,6 +207,7 @@ class RetrievalIndex:
         query: str,
         query_embedding: list[float] | None = None,
         top_k: int = 5,
+        filter_metadata: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
         """Search the index using Hybrid BM25 + Dense RRF.
 
@@ -214,6 +215,7 @@ class RetrievalIndex:
             query: Natural language text query.
             query_embedding: Optional dense embedding vector for semantic ranking.
             top_k: Maximum number of results to return.
+            filter_metadata: Optional key-value dictionary to filter documents.
 
         Returns:
             Ordered list of ``SearchResult`` objects (highest RRF score first).
@@ -225,7 +227,12 @@ class RetrievalIndex:
             raise ValueError(
                 "RetrievalIndex is empty. Call index_documents() before searching."
             )
-        return self._engine.search(query=query, query_embedding=query_embedding, top_k=top_k)
+        return self._engine.search(
+            query=query,
+            query_embedding=query_embedding,
+            top_k=top_k,
+            filter_metadata=filter_metadata,
+        )
 
     def clear(self) -> None:
         """Remove all indexed documents and reset the engine state."""

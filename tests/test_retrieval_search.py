@@ -284,3 +284,53 @@ class TestEng01AgentLoopIntegration:
         assert len(hits) > 0
         # d1 ("Python is a high-level programming language.") must be top-ranked
         assert hits[0]["doc_id"] == "d1"
+
+
+# ---------------------------------------------------------------------------
+# Metadata Filtering Integration Tests
+# ---------------------------------------------------------------------------
+
+class TestRetrievalSearchMetadataFiltering:
+    """Verifies metadata-based candidate pre-filtering in Hybrid Search and Executive Engine."""
+
+    def test_search_with_matching_metadata_filter(self) -> None:
+        idx = RetrievalIndex()
+        idx.index_documents([
+            {"doc_id": "doc1", "content": "Athena SQL cloud billing", "metadata": {"category": "finops"}},
+            {"doc_id": "doc2", "content": "DuckDB SQL in-memory execution", "metadata": {"category": "database"}},
+            {"doc_id": "doc3", "content": "AWS Athena data lake querying", "metadata": {"category": "finops"}},
+        ])
+
+        results = idx.search("SQL querying", filter_metadata={"category": "finops"}, top_k=5)
+        assert len(results) == 2
+        doc_ids = {r.document.doc_id for r in results}
+        assert doc_ids == {"doc1", "doc3"}
+        assert "doc2" not in doc_ids
+
+    def test_search_with_non_matching_metadata_filter(self) -> None:
+        idx = RetrievalIndex()
+        idx.index_documents([
+            {"doc_id": "doc1", "content": "Athena SQL cloud billing", "metadata": {"category": "finops"}},
+        ])
+
+        results = idx.search("Athena", filter_metadata={"category": "machine_learning"}, top_k=5)
+        assert len(results) == 0
+
+    def test_executor_retrieval_search_with_filter_metadata(self) -> None:
+        idx = RetrievalIndex()
+        idx.index_documents([
+            {"doc_id": "doc1", "content": "Machine learning model weights", "metadata": {"tag": "ai"}},
+            {"doc_id": "doc2", "content": "FinOps cloud spend management", "metadata": {"tag": "finops"}},
+        ])
+        exe = ExecutiveEngineProcess(retrieval_index=idx)
+        payload = _make_payload({
+            "operation": "search",
+            "query": "management and models",
+            "filter_metadata": {"tag": "finops"},
+        })
+        result: ObservationPayload = asyncio.run(exe.execute_tool_call(payload))
+        assert result.success is True
+        hits = result.output_data["hits"]
+        assert len(hits) == 1
+        assert hits[0]["doc_id"] == "doc2"
+

@@ -196,6 +196,46 @@ class TestMCPToolExecution:
         assert "amount" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
+    async def test_tools_call_retrieval_search_with_metadata_filter(self, mcp_server: AthenaMCPServer) -> None:
+        """Verify retrieval_search respects filter_metadata over MCP protocol."""
+        # Index documents
+        await mcp_server.handle_message({
+            "jsonrpc": "2.0",
+            "id": 1001,
+            "method": "tools/call",
+            "params": {
+                "name": "retrieval_search",
+                "arguments": {
+                    "op": "index",
+                    "documents": [
+                        {"doc_id": "d1", "content": "AWS Athena pricing guide", "metadata": {"topic": "finops"}},
+                        {"doc_id": "d2", "content": "Python programming tutorial", "metadata": {"topic": "code"}},
+                    ],
+                },
+            },
+        })
+
+        # Query with filter_metadata
+        res = await mcp_server.handle_message({
+            "jsonrpc": "2.0",
+            "id": 1002,
+            "method": "tools/call",
+            "params": {
+                "name": "retrieval_search",
+                "arguments": {
+                    "op": "search",
+                    "query": "pricing tutorial",
+                    "filter_metadata": {"topic": "finops"},
+                },
+            },
+        })
+        assert res is not None
+        result = res["result"]
+        assert result["isError"] is False
+        assert "d1" in result["content"][0]["text"]
+        assert "d2" not in result["content"][0]["text"]
+
+    @pytest.mark.asyncio
     async def test_tools_call_unauthorized_tool(self, mcp_server: AthenaMCPServer) -> None:
         """Verify unauthorized tool is blocked and returns isError: True."""
         req = {

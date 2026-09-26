@@ -81,23 +81,29 @@ class HybridSearchEngine:
         self.documents.extend(docs)
         logger.info("Indexed %d documents into HybridSearchEngine.", len(docs))
 
-    def _compute_bm25_scores(self, query: str) -> List[Tuple[Document, float]]:
+    def _compute_bm25_scores(
+        self,
+        query: str,
+        documents: Optional[List[Document]] = None,
+    ) -> List[Tuple[Document, float]]:
         """Compute BM25 sparse keyword matching scores.
 
         Args:
             query: User search query string.
+            documents: Optional candidate document list (defaults to self.documents).
 
         Returns:
             List of (Document, score) tuples sorted by score descending.
         """
+        target_docs = documents if documents is not None else self.documents
         query_terms = set(query.lower().split())
         results: List[Tuple[Document, float]] = []
 
-        avg_dl = sum(len(doc.content.split()) for doc in self.documents) / max(len(self.documents), 1)
+        avg_dl = sum(len(doc.content.split()) for doc in target_docs) / max(len(target_docs), 1)
         k1 = 1.5
         b = 0.75
 
-        for doc in self.documents:
+        for doc in target_docs:
             doc_terms = doc.content.lower().split()
             dl = len(doc_terms)
             score = 0.0
@@ -105,7 +111,7 @@ class HybridSearchEngine:
             for term in query_terms:
                 freq = doc_terms.count(term)
                 if freq > 0:
-                    idf = math.log((len(self.documents) + 1) / (1 + sum(1 for d in self.documents if term in d.content.lower())))
+                    idf = math.log((len(target_docs) + 1) / (1 + sum(1 for d in target_docs if term in d.content.lower())))
                     num = freq * (k1 + 1)
                     den = freq + k1 * (1 - b + b * (dl / max(avg_dl, 1.0)))
                     score += idf * (num / max(den, 1e-6))
@@ -115,15 +121,21 @@ class HybridSearchEngine:
         results.sort(key=lambda x: x[1], reverse=True)
         return results
 
-    def _compute_dense_scores(self, query_embedding: List[float]) -> List[Tuple[Document, float]]:
+    def _compute_dense_scores(
+        self,
+        query_embedding: List[float],
+        documents: Optional[List[Document]] = None,
+    ) -> List[Tuple[Document, float]]:
         """Compute dense cosine similarity scores against document embeddings.
 
         Args:
             query_embedding: Dense float vector for search query.
+            documents: Optional candidate document list (defaults to self.documents).
 
         Returns:
             List of (Document, cosine_similarity) tuples sorted by score descending.
         """
+        target_docs = documents if documents is not None else self.documents
         results: List[Tuple[Document, float]] = []
 
         def cosine_sim(a: List[float], b: List[float]) -> float:
@@ -132,7 +144,7 @@ class HybridSearchEngine:
             norm_b = math.sqrt(sum(y * y for y in b))
             return dot / max(norm_a * norm_b, 1e-9)
 
-        for doc in self.documents:
+        for doc in target_docs:
             if doc.embedding is not None and len(doc.embedding) == len(query_embedding):
                 sim = cosine_sim(query_embedding, doc.embedding)
             else:
@@ -147,6 +159,7 @@ class HybridSearchEngine:
         query: str,
         query_embedding: Optional[List[float]] = None,
         top_k: int = 5,
+        filter_metadata: Optional[Dict[str, Any]] = None,
     ) -> List[SearchResult]:
         """Perform hybrid BM25 + Dense Semantic search combined via Reciprocal Rank Fusion (RRF).
 
@@ -157,28 +170,39 @@ class HybridSearchEngine:
             query: Text query string.
             query_embedding: Optional dense embedding for semantic matching.
             top_k: Maximum number of results to return.
+            filter_metadata: Optional dictionary of key-value metadata constraints.
 
         Returns:
             Ordered list of SearchResult objects.
         """
-        bm25_ranked = self._compute_bm25_scores(query)
+        candidate_docs = self.documents
+        if filter_metadata:
+            candidate_docs = [
+                doc
+                for doc in self.documents
+                if all(doc.metadata.get(k) == v for k, v in filter_metadata.items())
+            ]
+        if not candidate_docs:
+            return []
+
+        bm25_ranked = self._compute_bm25_scores(query, documents=candidate_docs)
         bm25_ranks = {doc.doc_id: i + 1 for i, (doc, _) in enumerate(bm25_ranked)}
 
         if query_embedding:
-            dense_ranked = self._compute_dense_scores(query_embedding)
+            dense_ranked = self._compute_dense_scores(query_embedding, documents=candidate_docs)
             dense_ranks = {doc.doc_id: i + 1 for i, (doc, _) in enumerate(dense_ranked)}
         else:
-            dense_ranks = {doc.doc_id: len(self.documents) for doc in self.documents}
+            dense_ranks = {doc.doc_id: len(candidate_docs) for doc in candidate_docs}
 
         rrf_scores: Dict[str, float] = {}
-        for doc in self.documents:
-            r_bm25 = bm25_ranks.get(doc.doc_id, len(self.documents))
-            r_dense = dense_ranks.get(doc.doc_id, len(self.documents))
+        for doc in candidate_docs:
+            r_bm25 = bm25_ranks.get(doc.doc_id, len(candidate_docs))
+            r_dense = dense_ranks.get(doc.doc_id, len(candidate_docs))
 
             score = (1.0 / (self.rrf_k + r_bm25)) + (1.0 / (self.rrf_k + r_dense))
             rrf_scores[doc.doc_id] = score
 
-        sorted_docs = sorted(self.documents, key=lambda d: rrf_scores[d.doc_id], reverse=True)
+        sorted_docs = sorted(candidate_docs, key=lambda d: rrf_scores[d.doc_id], reverse=True)
 
         output: List[SearchResult] = []
         for doc in sorted_docs[:top_k]:

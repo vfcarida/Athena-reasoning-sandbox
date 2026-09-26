@@ -78,6 +78,7 @@ When dispatched via `ExecutiveEngineProcess` or `AthenaMCPServer`, the `retrieva
 | `op` / `operation` | string | No | Operation: `"search"`, `"index"`, `"clear"`, `"export"`, `"get"`, `"delete"`, `"save"`, `"load"`. Default is `"search"`. |
 | `query` | string | For search | Search query string. |
 | `top_k` | int | No | Maximum hits to return (default 5). |
+| `filter_metadata` | dict | No | Key-value dictionary to pre-filter candidate documents. |
 | `documents` | list[dict] | For index | Document dictionaries with `doc_id` and `content`. |
 | `doc_id` | string | For get/delete | Document ID to inspect or remove. |
 | `filepath` | string | For save/load | Path to destination or source JSON file. |
