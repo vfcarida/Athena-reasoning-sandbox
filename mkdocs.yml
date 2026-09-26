@@ -48,9 +48,12 @@ nav:
   - Overview: index.md
   - Guides:
       - Quickstart Guide: guides/quickstart.md
+      - Model Context Protocol (MCP): guides/mcp-integration.md
+      - Hybrid RAG & Retrieval: guides/hybrid-rag.md
   - Architecture:
       - Cognitive-Executive Separation: architecture/overview.md
       - ADR-0001 Agent Loop Wiring: adr/0001-agent-loop-wiring.md
+      - ADR-0002 MCP Adapter Gateway: adr/0002-model-context-protocol-adapter.md
   - Technical Baseline:
       - Baseline & Test Lanes: BASELINE.md
       - Model Merging (Neuro-Fusion): MERGING.md

@@ -29,8 +29,11 @@ Welcome to the documentation for **Athena Reasoning Sandbox**. Athena is an open
 ## 🚀 Navigation
 
 - **[Quickstart Guide](guides/quickstart.md)**: Get running with the FinOps Autonomous Data Agent in under 30 seconds.
-- **[Architecture & Parallax Overview](architecture/overview.md)**: Deep dive into the cognitive-executive separation and system design.
+- **[Model Context Protocol (MCP) Guide](guides/mcp-integration.md)**: Connect external agent environments (Claude Desktop, Cursor) over JSON-RPC 2.0 stdio.
+- **[Hybrid RAG & Retrieval Engine](guides/hybrid-rag.md)**: BM25 + Dense RRF document ranking, stateful indexing, and JSON persistence.
+- **[Architecture & Parallax Overview](architecture/overview.md)**: Deep dive into cognitive-executive separation and system design.
 - **[ADR-0001: Agent Loop Wiring](adr/0001-agent-loop-wiring.md)**: Architectural Decision Record establishing Plan-then-Execute trajectory schemas.
+- **[ADR-0002: MCP Adapter Gateway](adr/0002-model-context-protocol-adapter.md)**: Architectural Decision Record introducing the MCP JSON-RPC 2.0 server gateway.
 - **[Baseline & Preflight Record](BASELINE.md)**: Executed test lanes, bandit security inventory, and baseline reproduction.
 - **[Model Merging & Neuro-Fusion](MERGING.md)**: Weight-space interpolation algorithms (SLERP, TIES, DARE) and SwiReasoning.
 - **[Contributing Guidelines](../CONTRIBUTING.md)**: Development workflow, typing standards, and pre-commit setup.
