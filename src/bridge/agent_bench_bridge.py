@@ -28,9 +28,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-import torch
-import torch.nn as nn
-
 logger = logging.getLogger(__name__)
 
 
@@ -112,7 +109,7 @@ class AgentBenchBridge:
 
     def export_for_evaluation(
         self,
-        model: nn.Module,
+        model: Any,
         tokenizer: Any,
         output_path: str | Path,
         model_name: str = "athena-experiment",
@@ -151,13 +148,19 @@ class AgentBenchBridge:
         if hasattr(model, "save_pretrained"):
             model.save_pretrained(str(path))
         else:
-            torch.save(model.state_dict(), path / "pytorch_model.bin")
+            try:
+                import torch
+                torch.save(model.state_dict(), path / "pytorch_model.bin")
+            except ImportError as err:
+                raise RuntimeError(
+                    "PyTorch is required to export models that do not implement save_pretrained."
+                ) from err
 
         if hasattr(tokenizer, "save_pretrained"):
             tokenizer.save_pretrained(str(path))
 
         # Generate Agent-Bench compatible YAML config
-        model_config = {
+        model_config: dict[str, Any] = {
             "model_id": model_name,
             "provider": provider,
             "model_path": str(path),
@@ -193,11 +196,12 @@ class AgentBenchBridge:
             yaml.dump(config_doc, f, default_flow_style=False, sort_keys=False)
 
         # Legacy metadata file for debugging
+        num_params = sum(p.numel() for p in model.parameters()) if hasattr(model, "parameters") else 0
         metadata = {
             "model_name": model_name,
             "model_path": str(path),
             "framework": "athena-reasoning-sandbox",
-            "num_parameters": sum(p.numel() for p in model.parameters()),
+            "num_parameters": num_params,
         }
         with open(path / "athena_metadata.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
@@ -323,7 +327,7 @@ class AgentBenchBridge:
         if not experiment_results:
             return {"error": "No experiment results to compare"}
 
-        comparison = {
+        comparison: dict[str, Any] = {
             "num_experiments": len(experiment_results),
             "experiments": [],
         }

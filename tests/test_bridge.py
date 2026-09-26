@@ -1,10 +1,5 @@
 """Tests for the Agent-Bench Bridge."""
 
-import pytest
-
-pytestmark = pytest.mark.heavy
-pytest.importorskip("torch")
-
 from src.bridge.agent_bench_bridge import AgentBenchBridge, BridgeConfig
 
 
@@ -32,11 +27,10 @@ def test_agent_bench_metrics_list():
 
 def test_export_for_evaluation_yaml(tmp_path):
     """Test that export_for_evaluation generates Agent-Bench compatible YAML."""
-    import torch.nn as nn
     bridge = AgentBenchBridge()
 
     # Mock model and tokenizer
-    class DummyModel(nn.Module):
+    class DummyModel:
         def save_pretrained(self, path):
             pass
     class DummyTokenizer:
