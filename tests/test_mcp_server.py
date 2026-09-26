@@ -175,6 +175,27 @@ class TestMCPToolExecution:
         assert "99.5" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
+    async def test_tools_call_describe_table(self, mcp_server: AthenaMCPServer) -> None:
+        """Verify describe_table returns schema column definitions via MCP."""
+        req = {
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {
+                "name": "describe_table",
+                "arguments": {
+                    "table_name": "sales",
+                },
+            },
+        }
+        res = await mcp_server.handle_message(req)
+        assert res is not None
+        result = res["result"]
+        assert result["isError"] is False
+        assert "order_id" in result["content"][0]["text"]
+        assert "amount" in result["content"][0]["text"]
+
+    @pytest.mark.asyncio
     async def test_tools_call_unauthorized_tool(self, mcp_server: AthenaMCPServer) -> None:
         """Verify unauthorized tool is blocked and returns isError: True."""
         req = {

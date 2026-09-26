@@ -55,6 +55,20 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "required": ["query"],
         },
     },
+    "describe_table": {
+        "name": "describe_table",
+        "description": "Inspect column names, data types, and metadata of a data lake table.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "table_name": {
+                    "type": "string",
+                    "description": "Target table name to inspect schema.",
+                },
+            },
+            "required": ["table_name"],
+        },
+    },
     "athena_query": {
         "name": "athena_query",
         "description": (

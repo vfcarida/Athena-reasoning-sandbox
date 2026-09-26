@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
@@ -48,6 +49,7 @@ DEFAULT_AUTHORIZED_TOOLS: set[str] = {
     "echo",
     "athena_query",
     "duckdb_query",
+    "describe_table",
     "sandbox_execute",
     "retrieval_search",
 }
@@ -365,10 +367,32 @@ class ExecutiveEngineProcess:
             results = index.search(query=query, query_embedding=query_embedding, top_k=top_k)
             return index.to_tool_result(results)
 
+        async def describe_table_handler(args: dict[str, Any]) -> dict[str, Any]:
+            table_name = args.get("table_name") or args.get("table")
+            if not table_name or not isinstance(table_name, str):
+                raise ValueError("Missing required 'table_name' argument in describe_table.")
+
+            clean_name = table_name.strip().strip(";\"'")
+            if not re.match(r"^[A-Za-z0-9_.]+$", clean_name):
+                raise ValueError(f"Invalid table identifier format: '{clean_name}'")
+
+            sql = f"DESCRIBE {clean_name};"
+            if self._duckdb_client is not None:
+                return await self._duckdb_client.async_execute_query(sql=sql)
+            elif self._athena_client is not None:
+                return await asyncio.to_thread(self._athena_client.execute_query, sql=sql, dry_run=False)
+            else:
+                from src.athena.duckdb_client import DuckDBClient
+
+                client = DuckDBClient()
+                self._duckdb_client = client
+                return await client.async_execute_query(sql=sql)
+
         self._registry["ping"] = ping_handler
         self._registry["echo"] = echo_handler
         self._registry["athena_query"] = athena_query_handler
         self._registry["duckdb_query"] = duckdb_query_handler
+        self._registry["describe_table"] = describe_table_handler
         self._registry["sandbox_execute"] = sandbox_execute_handler
         self._registry["retrieval_search"] = retrieval_search_handler
 

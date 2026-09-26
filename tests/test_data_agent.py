@@ -184,3 +184,18 @@ async def test_data_agent_with_checkpoint_manager(tmp_path: Path, test_duckdb_cl
     # Verify checkpoint files were written to disk
     checkpoints = list(tmp_path.glob("*.json"))
     assert len(checkpoints) >= 1
+
+
+@pytest.mark.asyncio
+async def test_data_agent_discover_schema(test_duckdb_client: DuckDBClient):
+    """Ensure agent can discover table columns and types via executive boundary."""
+    agent = AutonomousDataAgent(
+        backend="duckdb",
+        duckdb_client=test_duckdb_client,
+    )
+    schema = await agent.discover_schema("sales")
+    assert len(schema) >= 3
+    col_names = [c["column_name"] for c in schema]
+    assert "order_id" in col_names
+    assert "amount" in col_names
+    assert "dt" in col_names

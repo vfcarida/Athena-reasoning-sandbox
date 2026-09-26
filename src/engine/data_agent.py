@@ -27,7 +27,7 @@ from src.athena.duckdb_client import DuckDBClient
 from src.engine.agent_loop import AgentLoop, AgentPlanner
 from src.engine.dispatcher import ParallaxToolDispatcher
 from src.engine.executor import ExecutiveEngineProcess
-from src.reasoning.schemas import ActionType, ReasoningStep
+from src.reasoning.schemas import ActionType, ReasoningStep, ToolCallPayload
 from src.state.checkpoint_manager import (
     ConversationCheckpointManager,
     ConversationStateCheckpoint,
@@ -106,6 +106,37 @@ class AutonomousDataAgent:
         )
         self.dispatcher = ParallaxToolDispatcher(executor=self.executor)
         self.agent_loop = AgentLoop(dispatcher=self.dispatcher)
+
+    async def discover_schema(self, table_name: str) -> list[dict[str, Any]]:
+        """Autonomously discover table column definitions through the executive boundary.
+
+        Args:
+            table_name: Name of the analytical table to inspect.
+
+        Returns:
+            List of column descriptor dictionaries with column_name and column_type.
+        """
+        payload = ToolCallPayload(
+            call_id=f"schema-{uuid.uuid4()}",
+            tool_name="describe_table",
+            arguments={"table_name": table_name},
+            timeout_seconds=10.0,
+        )
+        obs = await self.dispatcher.dispatch_tool_call(payload)
+        if not obs.success or not obs.output_data:
+            logger.warning("Could not discover schema for table '%s': %s", table_name, obs.error_message)
+            return []
+
+        rows = obs.output_data.get("rows", [])
+        columns: list[dict[str, Any]] = []
+        for r in rows:
+            if isinstance(r, (list, tuple)) and len(r) >= 2:
+                columns.append({"column_name": str(r[0]), "column_type": str(r[1])})
+            elif isinstance(r, dict):
+                col_name = str(r.get("column_name", r.get("Field", r.get("name", ""))))
+                col_type = str(r.get("column_type", r.get("Type", r.get("type", ""))))
+                columns.append({"column_name": col_name, "column_type": col_type})
+        return columns
 
     def _reflect_and_refine_sql(
         self,
