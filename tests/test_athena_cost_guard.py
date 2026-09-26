@@ -495,3 +495,55 @@ async def test_athena_client_async_wait_for_completion_mock():
     assert res["status"] == "SUCCEEDED"
     assert res["data_scanned_in_bytes"] == 1024
 
+
+# ==============================================================================
+# 9. Metadata Discovery and Cost Estimation Tests
+# ==============================================================================
+
+
+def test_metadata_query_recognition():
+    """Verify is_metadata_query identifies schema exploration and plan queries."""
+    guard = AthenaQueryGuard()
+    assert guard.is_metadata_query("DESCRIBE sales;") is True
+    assert guard.is_metadata_query("DESC sales;") is True
+    assert guard.is_metadata_query("SHOW TABLES;") is True
+    assert guard.is_metadata_query("SHOW COLUMNS FROM user_events;") is True
+    assert guard.is_metadata_query("EXPLAIN SELECT id FROM tbl WHERE dt = '2026-09-01';") is True
+    assert guard.is_metadata_query("PRAGMA table_info('sales');") is True
+    assert guard.is_metadata_query("SELECT table_name FROM information_schema.tables;") is True
+    assert guard.is_metadata_query("SELECT 1;") is True
+
+    # Standard analytical table query is NOT metadata
+    assert guard.is_metadata_query("SELECT id, amount FROM sales WHERE dt = '2026-09-01' LIMIT 10;") is False
+
+
+def test_metadata_query_exempt_from_partition_check():
+    """Verify metadata discovery commands pass validate_query without WHERE partition filter."""
+    guard = AthenaQueryGuard()
+    # These would fail partition checks if not recognized as metadata
+    guard.validate_query("DESCRIBE customer_orders;")
+    guard.validate_query("SHOW TABLES;")
+    guard.validate_query("SHOW COLUMNS FROM sales;")
+    guard.validate_query("SELECT table_name FROM information_schema.tables;")
+
+
+def test_estimate_query_cost_metrics():
+    """Verify estimate_query_cost produces structured projections and pricing tiers."""
+    guard = AthenaQueryGuard()
+
+    # Metadata cost is FREE
+    meta_cost = guard.estimate_query_cost("SHOW TABLES;")
+    assert meta_cost["cost_tier"] == "FREE"
+    assert meta_cost["projected_cost_usd"] == 0.0
+    assert meta_cost["projected_scan_bytes"] == 0
+
+    # Partitioned query with explicit columns
+    sql_part = "SELECT order_id, amount FROM sales WHERE dt = '2026-09-01' LIMIT 100;"
+    cost_part = guard.estimate_query_cost(sql_part, table_size_bytes=10_000_000_000)
+    assert cost_part["is_metadata"] is False
+    assert cost_part["projected_scan_bytes"] > 0
+    assert cost_part["projected_cost_usd"] >= 0.0
+    assert cost_part["projection_ratio"] < 1.0
+    assert cost_part["cost_tier"] in ("LOW", "MEDIUM")
+
+

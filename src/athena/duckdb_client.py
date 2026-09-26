@@ -49,7 +49,7 @@ class DuckDBClient:
             max_scan_bytes: Maximum allowed scan bytes threshold (default 10GB).
         """
         self.database = database
-        self.query_guard = query_guard or AthenaQueryGuard()
+        self.query_guard = query_guard or AthenaQueryGuard(dialect="duckdb")
         self.max_scan_bytes = max_scan_bytes
         self.con = duckdb.connect(database=self.database)
         logger.info("Initialized local DuckDB client (database='%s')", database)
