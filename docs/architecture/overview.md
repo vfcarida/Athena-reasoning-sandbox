@@ -76,7 +76,10 @@ The `AthenaQueryGuard` uses `sqlglot` to parse generated SQL queries into an Abs
 1. **Partition Pruning Verification**: Walks `sqlglot.expressions.Where` nodes to guarantee partition key predicates (e.g. `dt = '...'`) are present as conjunctions. Rejects unpartitioned scans with `UnpartitionedQueryError`.
 2. **Unbounded Projection Rejection**: Disallows wildcard column selections (`SELECT *`), enforcing explicit column projection to optimize columnar reads.
 3. **Implicit/Explicit Row Limits**: Requires an explicit `LIMIT` clause to protect client memory buffers from unexpected result sizes.
-4. **AWS WorkGroup Cutoff**: Sets `BytesScannedCutoffPerQuery` on AWS Athena workgroups and polls `DataScannedInBytes` with auto-cancellation if query bounds are exceeded.
+4. **Metadata & Introspection Bypass**: Intelligently identifies schema discovery statements (`SHOW TABLES`, `SHOW COLUMNS`, `DESCRIBE <table>`, `EXPLAIN ...`) and parameter-free queries (`SELECT 1`), safely exempting them from partition requirements while maintaining SQL validity.
+5. **Pre-Execution Cost Estimation**: Uses `estimate_query_cost` with dataset statistics (total bytes, total columns, partition column) to calculate estimated scan volume and projected USD cost ($5.00/TB AWS Athena baseline) prior to dispatch.
+6. **Multi-Dialect Support**: Validates and rewrites queries across `trino` (AWS Athena engine) and `duckdb` dialects.
+7. **AWS WorkGroup Cutoff**: Sets `BytesScannedCutoffPerQuery` on AWS Athena workgroups and polls `DataScannedInBytes` with auto-cancellation if query bounds are exceeded.
 
 ---
 

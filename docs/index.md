@@ -31,6 +31,7 @@ Welcome to the documentation for **Athena Reasoning Sandbox**. Athena is an open
 - **[Quickstart Guide](guides/quickstart.md)**: Get running with the FinOps Autonomous Data Agent in under 30 seconds.
 - **[Model Context Protocol (MCP) Guide](guides/mcp-integration.md)**: Connect external agent environments (Claude Desktop, Cursor) over JSON-RPC 2.0 stdio.
 - **[Hybrid RAG & Retrieval Engine](guides/hybrid-rag.md)**: BM25 + Dense RRF document ranking, stateful indexing, and JSON persistence.
+- **[FinOps AST Cost Guard](guides/finops-cost-guard.md)**: Pre-execution cost estimation, metadata bypass, and partition enforcement.
 - **[Architecture & Parallax Overview](architecture/overview.md)**: Deep dive into cognitive-executive separation and system design.
 - **[ADR-0001: Agent Loop Wiring](adr/0001-agent-loop-wiring.md)**: Architectural Decision Record establishing Plan-then-Execute trajectory schemas.
 - **[ADR-0002: MCP Adapter Gateway](adr/0002-model-context-protocol-adapter.md)**: Architectural Decision Record introducing the MCP JSON-RPC 2.0 server gateway.

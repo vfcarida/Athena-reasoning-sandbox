@@ -50,6 +50,7 @@ nav:
       - Quickstart Guide: guides/quickstart.md
       - Model Context Protocol (MCP): guides/mcp-integration.md
       - Hybrid RAG & Retrieval: guides/hybrid-rag.md
+      - FinOps AST Cost Guard: guides/finops-cost-guard.md
   - Architecture:
       - Cognitive-Executive Separation: architecture/overview.md
       - ADR-0001 Agent Loop Wiring: adr/0001-agent-loop-wiring.md
