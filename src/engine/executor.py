@@ -249,13 +249,19 @@ class ExecutiveEngineProcess:
         async def retrieval_search_handler(args: dict[str, Any]) -> dict[str, Any]:
             """Handle retrieval_search tool calls.
 
-            Supports three operations selected by the ``operation`` argument key:
+            Supports operations selected by the ``operation`` or ``op`` argument key:
 
             * ``"search"`` (default) — query the index.  Required: ``query`` (str).
               Optional: ``query_embedding`` (list[float]), ``top_k`` (int, default 5).
-            * ``"index"`` — add documents to the index.  Required: ``documents``
+            * ``"index"`` — add or update documents in the index.  Required: ``documents``
               (list of dicts, each with ``doc_id`` and ``content`` keys).
+              Optional: ``upsert`` (bool, default True).
             * ``"clear"`` — remove all documents from the index.
+            * ``"export"`` — export all indexed documents.
+            * ``"get"`` — retrieve a single document by ``doc_id`` (str).
+            * ``"delete"`` — delete a single document by ``doc_id`` (str).
+            * ``"save"`` — persist index documents to a JSON file at ``filepath`` (str).
+            * ``"load"`` — load documents from a JSON file at ``filepath`` (str).
 
             Args:
                 args: Tool argument payload from the Parallax boundary.
@@ -274,7 +280,7 @@ class ExecutiveEngineProcess:
                 index = RetrievalIndex()
                 self._retrieval_index = index
 
-            operation = args.get("operation", "search")
+            operation = args.get("operation") or args.get("op", "search")
 
             if operation == "index":
                 documents = args.get("documents")
@@ -283,7 +289,8 @@ class ExecutiveEngineProcess:
                         "'retrieval_search' with operation='index' requires a non-empty "
                         "'documents' list argument."
                     )
-                count = index.index_documents(documents)
+                upsert = bool(args.get("upsert", True))
+                count = index.index_documents(documents, upsert=upsert)
                 return {
                     "operation": "index",
                     "indexed_count": count,
@@ -293,6 +300,59 @@ class ExecutiveEngineProcess:
             if operation == "clear":
                 index.clear()
                 return {"operation": "clear", "total_docs": 0}
+
+            if operation == "export":
+                return {
+                    "operation": "export",
+                    "total_docs": index.document_count,
+                    "documents": index.export_documents(),
+                }
+
+            if operation == "get":
+                doc_id = args.get("doc_id")
+                if not doc_id:
+                    raise ValueError("'retrieval_search' with operation='get' requires 'doc_id'.")
+                return {
+                    "operation": "get",
+                    "doc_id": str(doc_id),
+                    "document": index.get_document(str(doc_id)),
+                }
+
+            if operation == "delete":
+                doc_id = args.get("doc_id")
+                if not doc_id:
+                    raise ValueError("'retrieval_search' with operation='delete' requires 'doc_id'.")
+                deleted = index.delete_document(str(doc_id))
+                return {
+                    "operation": "delete",
+                    "doc_id": str(doc_id),
+                    "deleted": deleted,
+                    "total_docs": index.document_count,
+                }
+
+            if operation == "save":
+                filepath = args.get("filepath")
+                if not filepath or not isinstance(filepath, str):
+                    raise ValueError("'retrieval_search' with operation='save' requires 'filepath'.")
+                index.save_to_json(filepath)
+                return {
+                    "operation": "save",
+                    "filepath": filepath,
+                    "total_docs": index.document_count,
+                }
+
+            if operation == "load":
+                filepath = args.get("filepath")
+                if not filepath or not isinstance(filepath, str):
+                    raise ValueError("'retrieval_search' with operation='load' requires 'filepath'.")
+                clear_existing = bool(args.get("clear_existing", False))
+                loaded = index.load_from_json(filepath, clear_existing=clear_existing)
+                return {
+                    "operation": "load",
+                    "filepath": filepath,
+                    "loaded_count": loaded,
+                    "total_docs": index.document_count,
+                }
 
             # Default: search
             query = args.get("query")

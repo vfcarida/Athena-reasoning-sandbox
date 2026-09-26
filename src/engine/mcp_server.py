@@ -85,15 +85,16 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "name": "retrieval_search",
         "description": (
             "Hybrid document search combining BM25 keyword matching and dense embeddings "
-            "via Reciprocal Rank Fusion (RRF)."
+            "via Reciprocal Rank Fusion (RRF). Supports indexing, querying, and JSON persistence."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "op": {
                     "type": "string",
-                    "enum": ["search", "index", "clear"],
-                    "description": "Operation type: 'search', 'index', or 'clear'.",
+                    "enum": ["search", "index", "clear", "export", "get", "delete", "save", "load"],
+                    "description": "Operation type (default 'search').",
+                    "default": "search",
                 },
                 "query": {
                     "type": "string",
@@ -103,6 +104,14 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "type": "integer",
                     "description": "Number of top results to return.",
                     "default": 5,
+                },
+                "doc_id": {
+                    "type": "string",
+                    "description": "Document identifier (required for 'get' and 'delete' ops).",
+                },
+                "filepath": {
+                    "type": "string",
+                    "description": "JSON file path (required for 'save' and 'load' ops).",
                 },
                 "documents": {
                     "type": "array",
@@ -118,7 +127,6 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     },
                 },
             },
-            "required": ["op"],
         },
     },
     "sandbox_execute": {
