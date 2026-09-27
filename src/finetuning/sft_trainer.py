@@ -162,7 +162,8 @@ class SFTOrchestrator:
 
         elif fmt == "sharegpt":
             # ShareGPT format: multi-turn conversation
-            conversations: list[dict[str, Any]] = sample.get("conversations", [])
+            conv_data = sample.get("conversations")
+            conversations: list[Any] = conv_data if isinstance(conv_data, list) else []
             parts = []
             for turn in conversations:
                 if isinstance(turn, dict):

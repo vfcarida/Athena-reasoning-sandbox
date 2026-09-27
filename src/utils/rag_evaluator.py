@@ -63,14 +63,18 @@ class SageMakerLLM(DeepEvalBaseLLM):
             self.client = boto3.client("sagemaker-runtime", region_name=self.region_name)
         return self.client
 
-    def generate(self, prompt: str, schema: Optional[BaseModel] = None) -> BaseModel | str:
+    def generate(
+        self, prompt: str, schema: Optional[type[BaseModel]] = None, *args: Any, **kwargs: Any
+    ) -> Any:
         """Invoke the SageMaker endpoint to generate a text completion.
 
         Uses standard HuggingFace Text Generation Inference (TGI) payload format.
 
         Args:
             prompt: The string prompt input.
-            schema: Optional Pydantic model for structured output validation.
+            schema: Optional Pydantic model class for structured output validation.
+            *args: Forwarded positional arguments from DeepEvalBaseLLM.
+            **kwargs: Forwarded keyword arguments from DeepEvalBaseLLM.
 
         Returns:
             The generated response string, or a parsed Pydantic model instance if schema is provided.
@@ -125,7 +129,7 @@ class SageMakerLLM(DeepEvalBaseLLM):
                 if hasattr(schema, "model_validate_json"):
                     return schema.model_validate_json(cleaned)
                 elif hasattr(schema, "parse_raw"):
-                    return schema.parse_raw(cleaned)
+                    return schema.parse_raw(cleaned)  # type: ignore[attr-defined]
                 else:
                     parsed_json = json.loads(cleaned)
                     return schema(**parsed_json)
@@ -135,7 +139,9 @@ class SageMakerLLM(DeepEvalBaseLLM):
             logger.error("SageMaker invocation failed on endpoint %s: %s", self.endpoint_name, e)
             raise RuntimeError(f"SageMaker endpoint invocation failed: {e}") from e
 
-    async def a_generate(self, prompt: str, schema: Optional[BaseModel] = None) -> BaseModel | str:
+    async def a_generate(
+        self, prompt: str, schema: Optional[type[BaseModel]] = None, *args: Any, **kwargs: Any
+    ) -> Any:
         """Asynchronously invoke the SageMaker endpoint to generate text.
 
         Executes the synchronous generate method in an event loop executor
@@ -144,11 +150,13 @@ class SageMakerLLM(DeepEvalBaseLLM):
         Args:
             prompt: The string prompt input.
             schema: Optional Pydantic model for structured output validation.
+            *args: Forwarded positional arguments from DeepEvalBaseLLM.
+            **kwargs: Forwarded keyword arguments from DeepEvalBaseLLM.
 
         Returns:
             The generated response string, or a parsed Pydantic model instance if schema is provided.
         """
-        return await asyncio.to_thread(self.generate, prompt, schema)
+        return await asyncio.to_thread(self.generate, prompt, schema, *args, **kwargs)
 
     def get_model_name(self) -> str:
         """Get the identifier name of the model.
@@ -203,7 +211,7 @@ def evaluate_rag_triad(
         input=input_text,
         actual_output=actual_output,
         expected_output=expected_output,
-        retrieval_context=retrieval_context,
+        retrieval_context=list(retrieval_context),  # type: ignore[arg-type]
     )
 
     # Initialize metrics with explicit threshold & custom judge model
@@ -218,12 +226,12 @@ def evaluate_rag_triad(
     )
 
     metrics = [faithfulness, relevancy, precision]
-    results = {}
+    results: dict[str, Any] = {}
     failures = []
 
     # Run evaluations sequentially
     for metric in metrics:
-        metric_name = metric.__class__.__name__
+        metric_name = str(type(metric).__name__)
         try:
             metric.measure(test_case)
             score = metric.score

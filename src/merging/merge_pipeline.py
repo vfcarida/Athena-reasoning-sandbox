@@ -131,7 +131,11 @@ class MergePipeline:
             return self._execute_single_tensor(method, config, base, models)
 
         # Handle state dict inputs (full model merging)
-        return self._execute_state_dict(method, config, base, models)
+        if isinstance(base, dict):
+            state_models = models if isinstance(models, list) else []
+            return self._execute_state_dict(method, config, base, state_models)
+
+        raise TypeError(f"Unsupported base model state type: {type(base).__name__}")
 
     def _execute_single_tensor(
         self,

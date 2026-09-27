@@ -33,9 +33,9 @@ jobs:
         run: |
           bandit -r src/ -x tests/ -s B105,B106,B615 -ll
 
-      - name: Run MyPy Type Checker on Core Architecture
+      - name: Run MyPy Type Checker Across Entire Codebase
         run: |
-          mypy src/engine src/athena src/state src/sandbox src/rag src/telemetry src/bridge evals
+          mypy src evals
 
 
   unit-tests-and-coverage:
