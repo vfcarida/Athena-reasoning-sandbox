@@ -7,12 +7,13 @@ from .schemas import (
     ReasoningStep,
     ToolCallPayload,
 )
-
-try:
-    from .swi_reasoning import SwiReasoningEngine, SwiReasoningSimulator
-except ImportError:
-    SwiReasoningEngine = None  # type: ignore[assignment, misc]
-    SwiReasoningSimulator = None  # type: ignore[assignment, misc]
+from .swi_reasoning import (
+    GenerationResult,
+    GenerationState,
+    InferenceMode,
+    SwiReasoningEngine,
+    SwiReasoningSimulator,
+)
 
 __all__ = [
     "ActionType",
@@ -20,6 +21,9 @@ __all__ = [
     "ObservationPayload",
     "ReasoningStep",
     "ToolCallPayload",
+    "GenerationResult",
+    "GenerationState",
+    "InferenceMode",
     "SwiReasoningEngine",
     "SwiReasoningSimulator",
 ]

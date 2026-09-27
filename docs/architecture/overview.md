@@ -147,3 +147,12 @@ graph TD
 - **Tool Spans (`tool.execution.<tool_name>`)**: Captures tool parameters, duration, timeout limits, and failure statuses (`unregistered`, `unauthorized`, `timeout`, `error`).
 - **In-Memory & Production Tracing**: Seamlessly switches between `InMemorySpanExporter` for testing and OpenTelemetry OTLP exporters in production.
 
+---
+
+## 8. SwiReasoning Engine & Decoupled Offline Simulation
+
+Athena implements the **SwiReasoning** paradigm for entropy-guided adaptive inference:
+- **Entropy-Guided Dynamic Switching**: Computes Shannon entropy $H(X) = -\sum_{i} P(x_i) \log_2 P(x_i)$ from decoding logits at each generation step. When cognitive uncertainty surpasses an entropy threshold, the engine switches from explicit generation to latent thinking mode (`<think> ... </think>`).
+- **Decoupled Architecture**: `SwiReasoningEngine` and `SwiReasoningSimulator` are completely decoupled from top-level neural dependencies. The engine supports PyTorch tensors as well as pure-Python float sequences.
+- **Offline Lane-1 Simulator**: In lightweight CI environments and unit tests without PyTorch or GPUs, `SwiReasoningSimulator` runs synthetic entropy-guided trajectories and constructs valid `AgentPlan` objects deterministically in pure Python.
+

@@ -30,17 +30,39 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import random
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Union
 
-import torch
-import torch.nn.functional as F
+try:
+    import torch
+    import torch.nn.functional as F
+
+    HAS_TORCH = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    F = None  # type: ignore[assignment]
+    HAS_TORCH = False
 
 from src.reasoning.schemas import ActionType, AgentPlan, ReasoningStep
 
 logger = logging.getLogger(__name__)
+
+
+def _has_real_torch() -> bool:
+    """Check whether genuine PyTorch (not a test mock stub) is available."""
+    if not HAS_TORCH or torch is None:
+        return False
+    from unittest.mock import MagicMock
+    return (
+        hasattr(torch, "__file__")
+        and hasattr(torch, "__version__")
+        and not isinstance(torch, MagicMock)
+        and not hasattr(torch, "_mock_name")
+    )
 
 
 class InferenceMode(Enum):
@@ -105,6 +127,12 @@ class SwiReasoningEngine:
             thinking_temperature: Sampling temperature during thinking mode.
             explicit_temperature: Sampling temperature during explicit mode.
         """
+        if not _has_real_torch() or torch is None:
+            raise RuntimeError(
+                "PyTorch is required for running SwiReasoningEngine with neural models. "
+                "For testing and lightweight simulation without GPU/torch, use SwiReasoningSimulator."
+            )
+
         self.model = model
         self.tokenizer = tokenizer
         self.entropy_threshold = entropy_threshold
@@ -125,35 +153,67 @@ class SwiReasoningEngine:
         )
 
     @staticmethod
-    def calculate_entropy(logits: torch.Tensor, eps: float = 1e-12) -> float:
+    def calculate_entropy(
+        logits: Union[Any, torch.Tensor, List[float]],
+        eps: float = 1e-12,
+    ) -> float:
         """Compute Shannon entropy from raw logits.
 
         Converts logits to a probability distribution via softmax, then computes:
 
             H(X) = -sum_i P(x_i) * log_2(P(x_i))
 
+        Supports PyTorch tensors as well as pure-Python float sequences.
+
         Args:
             logits: Raw unnormalized logit tensor of shape ``(vocab_size,)``
-                or ``(1, vocab_size)``.
+                or ``(1, vocab_size)``, or a sequence of float logit values.
             eps: Small epsilon for numerical stability.
 
         Returns:
             Shannon entropy in bits (float). Returns 0.0 for degenerate inputs.
         """
-        if logits.dim() > 1:
-            logits = logits.squeeze(0)
+        if _has_real_torch() and torch is not None and hasattr(logits, "dim"):
+            tensor_logits: Any = logits
+            if tensor_logits.dim() > 1:
+                tensor_logits = tensor_logits.squeeze(0)
 
-        logits = logits.to(torch.float64)
-        probs = F.softmax(logits, dim=-1)
-        probs = torch.clamp(probs, min=eps)
+            tensor_logits = tensor_logits.to(torch.float64)
+            probs = F.softmax(tensor_logits, dim=-1)
+            probs = torch.clamp(probs, min=eps)
 
-        log_probs = torch.log2(probs)
-        entropy = -torch.sum(probs * log_probs).item()
+            log_probs = torch.log2(probs)
+            entropy = -torch.sum(probs * log_probs).item()
 
-        if not (isinstance(entropy, float) and entropy == entropy and entropy != float("inf")):
+            if not (isinstance(entropy, float) and entropy == entropy and entropy != float("inf")):
+                return 0.0
+
+            return max(entropy, 0.0)
+
+        # Pure-Python fallback for offline environments and SwiReasoningSimulator
+        try:
+            if hasattr(logits, "tolist"):
+                vals = [float(x) for x in logits.tolist()]
+            elif isinstance(logits, (list, tuple)):
+                vals = [float(x) for x in logits]
+            else:
+                vals = [float(x) for x in logits]
+        except Exception:
             return 0.0
 
-        return max(entropy, 0.0)
+        if not vals:
+            return 0.0
+
+        max_val = max(vals)
+        exp_vals = [math.exp(v - max_val) for v in vals]
+        sum_exp = sum(exp_vals) or 1.0
+        probs_list = [max(ev / sum_exp, eps) for ev in exp_vals]
+        entropy_val = -sum(p * math.log2(p) for p in probs_list if p > 0.0)
+
+        if not (isinstance(entropy_val, float) and entropy_val == entropy_val and entropy_val != float("inf")):
+            return 0.0
+
+        return max(entropy_val, 0.0)
 
     def generate_with_switch_thinking(
         self,
@@ -339,7 +399,10 @@ class GenerationResult:
 
 
 class SwiReasoningSimulator:
-    """Lightweight simulator for SwiReasoning without requiring a real GPU model."""
+    """Lightweight simulator for SwiReasoning without requiring a real GPU model.
+
+    Runs 100% offline in lightweight test environments with zero external ML dependencies.
+    """
 
     def __init__(
         self,
@@ -354,24 +417,37 @@ class SwiReasoningSimulator:
         self.entropy_threshold = entropy_threshold
         self.max_switches = max_switches
         self.max_thinking_tokens = max_thinking_tokens
+        self.seed = seed
+        self.rng = random.Random(seed)
 
-        if seed is not None:
-            torch.manual_seed(seed)
+        if _has_real_torch() and torch is not None and seed is not None:
+            try:
+                torch.manual_seed(seed)
+            except Exception:
+                pass
 
-    def _generate_synthetic_logits(self, step: int, num_steps: int) -> torch.Tensor:
+    def _generate_synthetic_logits(self, step: int, num_steps: int) -> Any:
         """Generate synthetic logits with varying entropy levels."""
-        import math
-
         phase = step / max(num_steps - 1, 1)
         uncertainty = math.sin(phase * math.pi) * 2.5 + 0.5
         concentration = max(0.1, 5.0 - uncertainty * 2.0)
-        logits = torch.randn(self.vocab_size) * concentration
 
+        if _has_real_torch() and torch is not None:
+            try:
+                logits = torch.randn(self.vocab_size) * concentration
+                if concentration > 2.0:
+                    top_idx = torch.randint(0, self.vocab_size, (1,)).item()
+                    logits[top_idx] += concentration * 3.0
+                return logits
+            except Exception:
+                pass
+
+        # Pure-Python synthetic logit generation
+        logits_list = [self.rng.gauss(0.0, concentration) for _ in range(self.vocab_size)]
         if concentration > 2.0:
-            top_idx = torch.randint(0, self.vocab_size, (1,)).item()
-            logits[top_idx] += concentration * 3.0
-
-        return logits
+            top_idx = self.rng.randint(0, self.vocab_size - 1)
+            logits_list[top_idx] += concentration * 3.0
+        return logits_list
 
     def simulate(
         self,

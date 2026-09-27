@@ -105,7 +105,6 @@ def test_grpc_boundary_deprecation_warning():
         assert any(issubclass(w.category, DeprecationWarning) for w in recorded)
 
 
-@pytest.mark.heavy
 @pytest.mark.asyncio
 async def test_swi_reasoning_async_simulation():
     """Test async SwiReasoning simulator and AgentPlan extraction."""
