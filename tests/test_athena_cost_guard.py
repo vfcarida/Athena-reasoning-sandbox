@@ -565,4 +565,88 @@ def test_max_cost_usd_budget_accepted():
     guard.validate_query(sql, table_size_bytes=100 * 1024 * 1024)
 
 
+# ---------------------------------------------------------------------------
+# EXT-09: explain_compliance diagnostic inspection tests
+# ---------------------------------------------------------------------------
+
+def test_explain_compliance_compliant_query():
+    """Verify explain_compliance confirms compliant queries without violations."""
+    guard = AthenaQueryGuard(dialect="duckdb")
+    sql = "SELECT order_id, amount FROM orders WHERE dt = '2026-09-01' LIMIT 100;"
+    report = guard.explain_compliance(sql)
+
+    assert report["is_compliant"] is True
+    assert report["is_metadata"] is False
+    assert report["has_partition_filter"] is True
+    assert report["has_star_projection"] is False
+    assert report["has_limit"] is True
+    assert report["limit_value"] == 100
+    assert "order_id" in report["projected_columns"]
+    assert len(report["violations"]) == 0
+    assert report["estimated_cost"]["cost_tier"] in ("LOW", "MEDIUM")
+
+
+def test_explain_compliance_metadata_query():
+    """Verify explain_compliance identifies metadata queries with FREE cost."""
+    guard = AthenaQueryGuard()
+    report = guard.explain_compliance("DESCRIBE customer_orders;")
+
+    assert report["is_compliant"] is True
+    assert report["is_metadata"] is True
+    assert report["estimated_cost"]["cost_tier"] == "FREE"
+    assert report["estimated_cost"]["projected_cost_usd"] == 0.0
+    assert len(report["violations"]) == 0
+
+
+def test_explain_compliance_unpartitioned_query():
+    """Verify explain_compliance records partition violations without throwing."""
+    guard = AthenaQueryGuard(dialect="duckdb")
+    sql = "SELECT order_id FROM orders LIMIT 50;"
+    report = guard.explain_compliance(sql)
+
+    assert report["is_compliant"] is False
+    assert report["has_partition_filter"] is False
+    assert any("partition filter" in v for v in report["violations"])
+    assert len(report["recommendations"]) > 0
+
+
+def test_explain_compliance_unbounded_star():
+    """Verify explain_compliance catches SELECT * projections and missing limits."""
+    guard = AthenaQueryGuard(dialect="duckdb")
+    sql = "SELECT * FROM orders WHERE dt = '2026-09-01';"
+    report = guard.explain_compliance(sql)
+
+    assert report["is_compliant"] is False
+    assert report["has_star_projection"] is True
+    assert report["has_limit"] is False
+    assert any("SELECT *" in v for v in report["violations"])
+    assert any("LIMIT" in v for v in report["violations"])
+
+
+def test_explain_compliance_budget_exceeded():
+    """Verify explain_compliance flags queries exceeding cost limits."""
+    guard = AthenaQueryGuard(dialect="duckdb", max_cost_usd=0.0001)
+    sql = "SELECT order_id FROM orders WHERE dt = '2026-09-01' LIMIT 50;"
+    report = guard.explain_compliance(sql, table_size_bytes=50 * 1024**4)
+
+    assert report["is_compliant"] is False
+    assert any("budget" in v.lower() for v in report["violations"])
+
+
+def test_dry_run_includes_compliance_report():
+    """Verify dry_run execution attached compliance report in AthenaClient."""
+    from src.athena.athena_client import AthenaClient
+
+    client = AthenaClient()
+    sql = "SELECT id, metric FROM analytics WHERE dt = '2026-09-01' LIMIT 10;"
+    res = client.execute_query(sql, dry_run=True)
+
+    assert res["status"] == "SUCCEEDED"
+    assert res["mode"] == "DRY_RUN"
+    assert "compliance" in res
+    assert res["compliance"]["is_compliant"] is True
+    assert res["compliance"]["limit_value"] == 10
+
+
+
 

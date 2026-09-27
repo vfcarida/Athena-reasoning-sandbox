@@ -81,6 +81,11 @@ class DuckDBClient:
 
         if dry_run:
             logger.info("Executing DuckDB query in DRY-RUN mode (Cost Validated).")
+            compliance_report = self.query_guard.explain_compliance(
+                query=sql,
+                required_partition_keys=required_partition_keys,
+                enforce_limit=enforce_limit,
+            )
             return {
                 "status": "SUCCEEDED",
                 "mode": "DRY_RUN",
@@ -91,7 +96,9 @@ class DuckDBClient:
                 "row_count": 0,
                 "columns": [],
                 "rows": [],
+                "compliance": compliance_report,
             }
+
 
         start_time = time.perf_counter()
         rel = self.con.sql(sql)

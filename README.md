@@ -3,8 +3,9 @@
   <p><b>FinOps-Governed Autonomous Reasoning Agents & Cognitive-Executive Architecture</b></p>
   <p>
     <a href="https://github.com/vfcarida/Athena-reasoning-sandbox/actions"><img src="https://img.shields.io/badge/CI-passing-brightgreen?style=flat-square&logo=github-actions" alt="CI Status"></a>
-    <a href="tests/"><img src="https://img.shields.io/badge/Tests-215%20passed-brightgreen?style=flat-square&logo=pytest" alt="Tests"></a>
-    <a href="docs/BASELINE.md"><img src="https://img.shields.io/badge/Coverage-50%25%20verified-blue?style=flat-square&logo=codecov" alt="Coverage"></a>
+    <a href="tests/"><img src="https://img.shields.io/badge/Tests-221%20passed-brightgreen?style=flat-square&logo=pytest" alt="Tests"></a>
+    <a href="docs/BASELINE.md"><img src="https://img.shields.io/badge/Coverage-64%25%20verified-blue?style=flat-square&logo=codecov" alt="Coverage"></a>
+
     <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff"></a>
     <a href="http://mypy-lang.org/"><img src="https://img.shields.io/badge/types-mypy-blue.svg?style=flat-square" alt="Type Checked"></a>
     <a href="https://github.com/vfcarida/Athena-reasoning-sandbox/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License"></a>

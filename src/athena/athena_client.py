@@ -238,6 +238,11 @@ class AthenaClient:
 
         if dry_run or self.boto_client is None:
             logger.info("Executing Athena query in DRY-RUN mode (Cost Validated).")
+            compliance_report = self.query_guard.explain_compliance(
+                query=sql,
+                required_partition_keys=required_partition_keys,
+                enforce_limit=enforce_limit,
+            )
             return {
                 "status": "SUCCEEDED",
                 "mode": "DRY_RUN",
@@ -247,7 +252,9 @@ class AthenaClient:
                 "workgroup": self.workgroup,
                 "max_scan_bytes": self.max_scan_bytes,
                 "data_scanned_in_bytes": 0,
+                "compliance": compliance_report,
             }
+
 
         # 2. Execute query via AWS Boto3 API with attached WorkGroup
         response = self.boto_client.start_query_execution(

@@ -80,6 +80,10 @@ def test_duckdb_client_dry_run(duckdb_client: DuckDBClient):
     assert res["status"] == "SUCCEEDED"
     assert res["mode"] == "DRY_RUN"
     assert res["row_count"] == 0
+    assert "compliance" in res
+    assert res["compliance"]["is_compliant"] is True
+    assert res["compliance"]["limit_value"] == 10
+
 
 
 @pytest.mark.asyncio

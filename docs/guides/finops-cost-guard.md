@@ -197,7 +197,37 @@ If an LLM agent produces an invalid or unbudgeted query (e.g. `SELECT * FROM use
                 - Injects LIMIT 100
        │
        ▼
-[QueryGuard]    ✅ AST Validated -> Dispatched across Parallax Boundary
 ```
 
 This ensures zero runaway queries reach the cloud data lake while maintaining autonomous agent self-direction.
+
+---
+
+## 📊 Non-Throwing Diagnostic Inspection (`explain_compliance`)
+
+For linters, IDE integrations, dry-run simulations, or agent pre-flight checks, `AthenaQueryGuard.explain_compliance()` analyzes queries structurally without throwing exceptions:
+
+```python
+from src.athena.query_guard import AthenaQueryGuard
+
+guard = AthenaQueryGuard(dialect="trino", max_cost_usd=1.0)
+sql = "SELECT order_id, amount FROM orders WHERE dt = '2026-09-01' LIMIT 100;"
+
+report = guard.explain_compliance(sql)
+print(report["is_compliant"])           # True
+print(report["has_partition_filter"])   # True
+print(report["limit_value"])            # 100
+print(report["estimated_cost"]["cost_tier"]) # "LOW"
+print(report["violations"])             # []
+```
+
+When queries violate FinOps rules, `explain_compliance` returns `is_compliant=False` and provides human-readable `violations` and actionable `recommendations`:
+
+```python
+bad_sql = "SELECT * FROM orders;"
+report = guard.explain_compliance(bad_sql)
+print(report["is_compliant"])      # False
+print(report["violations"])        # ["Missing mandatory partition filter...", "Prohibited unbounded 'SELECT *'...", "Query lacks an explicit LIMIT..."]
+print(report["recommendations"])   # ["Add WHERE predicate on partition key...", "Specify explicit columns...", "Append LIMIT <N>..."]
+```
+

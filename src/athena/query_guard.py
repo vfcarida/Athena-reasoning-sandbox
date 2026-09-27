@@ -212,7 +212,166 @@ class AthenaQueryGuard:
             "cost_tier": tier,
         }
 
+    def explain_compliance(
+        self,
+        query: str,
+        required_partition_keys: list[str] | None = None,
+        enforce_limit: bool = True,
+        max_cost_usd: float | None = None,
+        table_size_bytes: int = 1_000_000_000,
+        total_columns: int = 20,
+    ) -> dict[str, Any]:
+        """Produce a comprehensive diagnostic report of a query's FinOps compliance.
+
+        Executes structural AST inspection without raising exceptions, returning
+        detailed status on partitions, projections, limits, and cost projections.
+
+        Args:
+            query: Raw SQL query string.
+            required_partition_keys: Optional list of partition column names.
+            enforce_limit: Whether to check for LIMIT clause.
+            max_cost_usd: Optional budget limit override.
+            table_size_bytes: Estimated baseline table size in bytes.
+            total_columns: Estimated table column count.
+
+        Returns:
+            Dictionary with compliance diagnostics, extracted properties, and any violations.
+        """
+        violations: list[str] = []
+        recommendations: list[str] = []
+
+        is_meta = self.is_metadata_query(query)
+        if is_meta:
+            return {
+                "is_compliant": True,
+                "is_metadata": True,
+                "dialect": self.dialect,
+                "has_partition_filter": True,
+                "partition_keys_checked": [],
+                "has_star_projection": False,
+                "projected_columns": [],
+                "has_limit": True,
+                "limit_value": None,
+                "violations": [],
+                "recommendations": [],
+                "estimated_cost": {
+                    "projected_scan_bytes": 0,
+                    "projected_cost_usd": 0.0,
+                    "is_metadata": True,
+                    "cost_tier": "FREE",
+                },
+            }
+
+        target_keys = {k.lower() for k in (required_partition_keys or self.partition_keys)}
+
+        try:
+            parsed = self._parse_sql(query)
+        except Exception as exc:
+            return {
+                "is_compliant": False,
+                "is_metadata": False,
+                "dialect": self.dialect,
+                "has_partition_filter": False,
+                "partition_keys_checked": sorted(target_keys),
+                "has_star_projection": False,
+                "projected_columns": [],
+                "has_limit": False,
+                "limit_value": None,
+                "violations": [f"SQL syntax / parsing failure: {exc}"],
+                "recommendations": ["Fix query syntax error before submitting to query guard."],
+                "estimated_cost": {
+                    "projected_scan_bytes": table_size_bytes,
+                    "projected_cost_usd": round((table_size_bytes / (1024**4)) * 5.0, 6),
+                    "is_metadata": False,
+                    "cost_tier": "HIGH",
+                },
+            }
+
+        select_nodes = self._extract_select_nodes(parsed)
+        has_partition = False
+        has_star = False
+        has_limit = False
+        limit_val: int | None = None
+        projected_cols: list[str] = []
+
+        if not select_nodes:
+            violations.append("Query lacks a valid SELECT root.")
+            recommendations.append("Ensure query contains an analytical SELECT statement.")
+        else:
+            sel = select_nodes[0]
+            # Check partition
+            where_node = sel.args.get("where")
+            if where_node is not None and self._is_pruning_predicate(where_node.this, target_keys):
+                has_partition = True
+            else:
+                violations.append(
+                    f"Missing mandatory partition filter on one of {sorted(target_keys)}."
+                )
+                recommendations.append(
+                    f"Add WHERE predicate on partition key (e.g. WHERE {next(iter(sorted(target_keys)), 'dt')} = '...')."
+                )
+
+            # Check projections
+            for expr in sel.expressions:
+                if isinstance(expr, exp.Star) or (isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star)):
+                    has_star = True
+                elif isinstance(expr, exp.Column):
+                    projected_cols.append(expr.name)
+                elif isinstance(expr, exp.Alias):
+                    projected_cols.append(expr.alias)
+
+            if has_star:
+                violations.append("Prohibited unbounded 'SELECT *' projection.")
+                recommendations.append("Specify explicit columns rather than SELECT * to enable columnar pruning.")
+
+            # Check limit
+            limit_node = sel.args.get("limit") or sel.find(exp.Limit)
+            if limit_node is not None:
+                has_limit = True
+                if isinstance(limit_node.expression, exp.Literal):
+                    try:
+                        limit_val = int(limit_node.expression.this)
+                    except (ValueError, TypeError):
+                        limit_val = None
+            elif enforce_limit:
+                violations.append("Query lacks an explicit LIMIT clause.")
+                recommendations.append("Append LIMIT <N> (e.g. LIMIT 1000) to protect client memory buffers.")
+
+        # Estimate cost
+        cost_est = self.estimate_query_cost(
+            query=query,
+            table_size_bytes=table_size_bytes,
+            total_columns=total_columns,
+        )
+
+        budget_limit = max_cost_usd if max_cost_usd is not None else self.max_cost_usd
+        if budget_limit is not None and cost_est["projected_cost_usd"] > budget_limit:
+            violations.append(
+                f"Projected cost ${cost_est['projected_cost_usd']:.4f} USD exceeds budget of ${budget_limit:.4f} USD."
+            )
+            recommendations.append(
+                "Apply tighter partition range or reduce projected columns to lower cost."
+            )
+
+        is_compliant = len(violations) == 0
+
+        return {
+            "is_compliant": is_compliant,
+            "is_metadata": False,
+            "dialect": self.dialect,
+            "has_partition_filter": has_partition,
+            "partition_keys_checked": sorted(target_keys),
+            "has_star_projection": has_star,
+            "projected_columns": projected_cols,
+            "has_limit": has_limit,
+            "limit_value": limit_val,
+            "violations": violations,
+            "recommendations": recommendations,
+            "estimated_cost": cost_est,
+        }
+
     def _parse_sql(self, query: str, dialect: str | None = None) -> exp.Expression:
+
         """Parse raw SQL query into sqlglot AST expression.
 
         Args:

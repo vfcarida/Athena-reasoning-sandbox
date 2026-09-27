@@ -35,7 +35,8 @@ jobs:
 
       - name: Run MyPy Type Checker on Core Architecture
         run: |
-          mypy src/engine src/athena src/state src/sandbox src/rag src/telemetry
+          mypy src/engine src/athena src/state src/sandbox src/rag src/telemetry src/bridge evals
+
 
   unit-tests-and-coverage:
     name: Unit Tests & Code Coverage Gate (Lane 1 >= 48%)
@@ -79,6 +80,7 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
 
-      - name: Execute Deterministic Trajectory Evaluation Suite (Offline Lane 1)
+      - name: Execute Deterministic Trajectory & RAG Evaluation Suite (Offline Lane 1)
         run: |
-          pytest evals/test_agent_trajectory.py -v -m "not heavy and not lane2"
+          pytest evals/ -v -m "not heavy and not lane2"
+
