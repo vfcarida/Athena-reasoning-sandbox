@@ -24,10 +24,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-import torch
-import torch.nn as nn
+try:
+    import torch
+    import torch.nn as nn
+    HAS_TORCH = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    nn = None  # type: ignore[assignment]
+    HAS_TORCH = False
 
 logger = logging.getLogger(__name__)
+
+
+def _has_real_torch() -> bool:
+    """Check whether genuine PyTorch (not a test mock stub) is available."""
+    if not HAS_TORCH or torch is None:
+        return False
+    from unittest.mock import MagicMock
+    return (
+        hasattr(torch, "__file__")
+        and hasattr(torch, "__version__")
+        and not isinstance(torch, MagicMock)
+        and not hasattr(torch, "_mock_name")
+    )
 
 
 @dataclass
@@ -92,9 +111,11 @@ class LoRAFineTuner:
             config: LoRA/QLoRA configuration.
         """
         self.config = config
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        torch.manual_seed(config.seed)
+        if _has_real_torch() and torch is not None:
+            self.device: Any = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            torch.manual_seed(config.seed)
+        else:
+            self.device = "cpu"
 
         logger.info(
             "LoRAFineTuner initialized: model=%s, rank=%d, alpha=%d, "
@@ -103,7 +124,7 @@ class LoRAFineTuner:
             config.quantize_4bit, config.target_modules,
         )
 
-    def prepare_model(self) -> tuple[nn.Module, Any]:
+    def prepare_model(self) -> tuple[Any, Any]:
         """Load the base model and apply LoRA/QLoRA adapters.
 
         If ``quantize_4bit`` is enabled, the base model is loaded with

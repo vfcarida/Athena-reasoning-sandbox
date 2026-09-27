@@ -2,11 +2,6 @@
 
 import pytest
 
-pytestmark = pytest.mark.heavy
-pytest.importorskip("torch")
-
-import torch
-
 from src.pretraining.continued_pretraining import ContinuedPretrainingConfig
 from src.pretraining.from_scratch import PretrainingConfig, TextDataset, TransformerFromScratch
 
@@ -27,8 +22,10 @@ def tiny_pretrain_config():
         mixed_precision="no",  # disable AMP for fast CPU tests
     )
 
+@pytest.mark.heavy
 def test_transformer_from_scratch_build(tiny_pretrain_config):
     """Test that the model initializes correctly with given dimensions."""
+    torch = pytest.importorskip("torch")
     trainer = TransformerFromScratch(tiny_pretrain_config)
     model = trainer.build_model()
 
@@ -44,6 +41,8 @@ def test_transformer_from_scratch_build(tiny_pretrain_config):
 
     assert outputs.logits.shape == (2, 10, 100)
 
+
+@pytest.mark.heavy
 def test_tokenizer_and_dataset(tiny_pretrain_config):
     """Test tokenizer training and dataset chunking."""
     trainer = TransformerFromScratch(tiny_pretrain_config)

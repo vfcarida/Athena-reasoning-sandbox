@@ -1,10 +1,5 @@
 """Tests for SFT and LoRA fine-tuning pipelines."""
 
-import pytest
-
-pytestmark = pytest.mark.heavy
-pytest.importorskip("torch")
-
 from src.finetuning.lora_trainer import LoRAConfig
 from src.finetuning.sft_trainer import SFTConfig, SFTOrchestrator
 

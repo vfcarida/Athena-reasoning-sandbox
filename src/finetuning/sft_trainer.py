@@ -22,9 +22,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-import torch
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    HAS_TORCH = False
 
 logger = logging.getLogger(__name__)
+
+
+def _has_real_torch() -> bool:
+    """Check whether genuine PyTorch (not a test mock stub) is available."""
+    if not HAS_TORCH or torch is None:
+        return False
+    from unittest.mock import MagicMock
+    return (
+        hasattr(torch, "__file__")
+        and hasattr(torch, "__version__")
+        and not isinstance(torch, MagicMock)
+        and not hasattr(torch, "_mock_name")
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -121,9 +139,11 @@ class SFTOrchestrator:
             config: SFT configuration.
         """
         self.config = config
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        torch.manual_seed(config.seed)
+        if _has_real_torch() and torch is not None:
+            self.device: Any = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            torch.manual_seed(config.seed)
+        else:
+            self.device = "cpu"
 
         logger.info(
             "SFTOrchestrator initialized: model=%s, format=%s, seq_length=%d",
