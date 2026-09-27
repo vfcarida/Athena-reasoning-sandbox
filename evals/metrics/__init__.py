@@ -1,5 +1,11 @@
 """Evaluation metrics package for Athena Reasoning Sandbox."""
 
+from evals.metrics.rag_metrics import (
+    DeterministicContextPrecisionMetric,
+    DeterministicContextRelevancyMetric,
+    DeterministicFaithfulnessMetric,
+    DeterministicRAGGate,
+)
 from evals.metrics.trajectory_metrics import (
     DEFAULT_ALLOWED_TOOLS,
     KNOWN_INVALID_TOOLS,
@@ -15,6 +21,10 @@ from evals.metrics.trajectory_metrics import (
 __all__ = [
     "DEFAULT_ALLOWED_TOOLS",
     "KNOWN_INVALID_TOOLS",
+    "DeterministicContextPrecisionMetric",
+    "DeterministicContextRelevancyMetric",
+    "DeterministicFaithfulnessMetric",
+    "DeterministicRAGGate",
     "DeterministicTrajectoryHeuristic",
     "PlanAdherenceMetric",
     "PlanQualityMetric",
@@ -23,3 +33,4 @@ __all__ = [
     "ToolCorrectnessMetric",
     "create_real_geval_trajectory_judge",
 ]
+

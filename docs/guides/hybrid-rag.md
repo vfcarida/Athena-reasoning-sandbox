@@ -85,9 +85,41 @@ When dispatched via `ExecutiveEngineProcess` or `AthenaMCPServer`, the `retrieva
 
 ---
 
-## 4. Verification & Testing
+---
 
-Run the dedicated test suites to validate hybrid search and persistence:
+## 4. Deterministic Offline RAG Evaluation (Lane 1)
+
+Athena provides zero-dependency, deterministic RAG evaluation heuristics (`evals/metrics/rag_metrics.py`) that run 100% offline in CI without paid LLM API keys:
+
+1. **Context Relevancy (`DeterministicContextRelevancyMetric`)**:
+   - Assesses what proportion of retrieved chunks contain query keywords or key semantic terms.
+2. **Context Precision (`DeterministicContextPrecisionMetric`)**:
+   - Evaluates rank-weighted positioning via Mean Average Precision (MAP / Precision@k), penalizing retrievals where irrelevant contexts are placed before relevant ones.
+3. **Output Faithfulness (`DeterministicFaithfulnessMetric`)**:
+   - Evaluates whether factual claims in the generated output are grounded in the retrieved contexts rather than hallucinated.
+4. **Unified Composite Gate (`DeterministicRAGGate`)**:
+   - Combines Relevancy (35%), Precision (35%), and Faithfulness (30%) with a configurable pass threshold (default 0.70).
+
+```python
+from deepeval.test_case import LLMTestCase
+from evals.metrics.rag_metrics import DeterministicRAGGate
+
+test_case = LLMTestCase(
+    input="What is AWS Athena pricing model?",
+    actual_output="AWS Athena charges 5 dollars per TB scanned.",
+    retrieval_context=["AWS Athena charges $5.00 per terabyte of data scanned from Amazon S3."],
+)
+
+gate = DeterministicRAGGate(threshold=0.70)
+score = gate.measure(test_case)
+assert gate.is_successful()
+```
+
+---
+
+## 5. Verification & Testing
+
+Run the dedicated test suites to validate hybrid search, persistence, and deterministic RAG evaluation:
 
 ```bash
 # Run hybrid search tests:
@@ -95,4 +127,8 @@ pytest tests/test_retrieval_search.py -v
 
 # Run persistence and CRUD tests:
 pytest tests/test_retrieval_persistence.py -v
+
+# Run deterministic RAG evaluation tests:
+pytest evals/test_rag_evaluation.py -v
 ```
+

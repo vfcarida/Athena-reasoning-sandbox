@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, cast
 
@@ -223,14 +224,17 @@ class HybridSearchEngine:
         actual_output: str,
         retrieved_contexts: List[str],
         threshold: float = 0.75,
+        deterministic: bool = True,
     ) -> float:
-        """Evaluate RAG faithfulness using DeepEval's FaithfulnessMetric.
+        """Evaluate RAG faithfulness using deterministic heuristic (Lane 1) or DeepEval (Lane 2).
 
         Args:
             query: Input prompt.
             actual_output: Generated output text.
             retrieved_contexts: List of retrieved context strings.
             threshold: Passing score threshold.
+            deterministic: If True (default), uses deterministic heuristic without external API keys.
+                If False, invokes DeepEval FaithfulnessMetric requiring OPENAI_API_KEY.
 
         Returns:
             Faithfulness score between 0.0 and 1.0.
@@ -240,6 +244,11 @@ class HybridSearchEngine:
             actual_output=actual_output,
             retrieval_context=cast(Any, retrieved_contexts),
         )
+        if deterministic or not os.getenv("OPENAI_API_KEY"):
+            from evals.metrics.rag_metrics import DeterministicFaithfulnessMetric
+            det_metric = DeterministicFaithfulnessMetric(threshold=threshold)
+            return det_metric.measure(test_case)
+
         metric = FaithfulnessMetric(threshold=threshold)
-        score = metric.measure(test_case)
-        return score
+        return float(metric.measure(test_case))
+

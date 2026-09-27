@@ -26,7 +26,10 @@ DEFAULT_ALLOWED_TOOLS: set[str] = {
     "echo",
     "ping",
     "athena_query",
+    "duckdb_query",
+    "describe_table",
     "sandbox_execute",
+    "retrieval_search",
 }
 
 # Known dangerous or hallucinated tool keywords that immediately penalize tool correctness
@@ -42,14 +45,24 @@ KNOWN_INVALID_TOOLS: set[str] = {
 }
 
 
-def _extract_keywords(text: str) -> set[str]:
+def _extract_text(item: Any) -> str:
+    """Extract plain text from string or context data object."""
+    if isinstance(item, str):
+        return item
+    if hasattr(item, "content"):
+        return str(item.content)
+    return str(item)
+
+
+def _extract_keywords(text: Any) -> set[str]:
     """Extract lowercase significant keywords (length >= 2, non-stopword)."""
+    raw_str = _extract_text(text)
     stopwords = {
         "step", "then", "with", "from", "that", "this", "where", "into",
         "about", "have", "will", "what", "when", "which", "there", "their",
         "should", "could", "would", "the", "and", "for", "are", "you",
     }
-    tokens = re.findall(r"\b[a-zA-Z0-9_-]{2,}\b", text.lower())
+    tokens = re.findall(r"\b[a-zA-Z0-9_-]{2,}\b", raw_str.lower())
     return {t for t in tokens if t not in stopwords}
 
 
@@ -147,7 +160,8 @@ class DeterministicTrajectoryHeuristic(BaseMetric):
             adherence_score = 1.0
         else:
             matches = 0
-            for planned_step in context:
+            for planned_step_raw in context:
+                planned_step = _extract_text(planned_step_raw)
                 step_lower = planned_step.lower()
                 if step_lower in output_lower:
                     matches += 1
@@ -182,7 +196,8 @@ class DeterministicTrajectoryHeuristic(BaseMetric):
             + 0.25 * completion_score
         )
         self.score = round(composite, 4)
-        self.success = self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        self.success = self.score >= threshold_val
         self.details = {
             "structure": structure_score,
             "tools": tool_score,
@@ -193,7 +208,7 @@ class DeterministicTrajectoryHeuristic(BaseMetric):
             f"Deterministic Trajectory Evaluation: Structure={structure_score:.2f}, "
             f"Tools={tool_score:.2f}, Adherence={adherence_score:.2f}, "
             f"Completion={completion_score:.2f}. Total={self.score:.4f} "
-            f"(Threshold={self.threshold:.2f}, Pass={self.success})."
+            f"(Threshold={threshold_val:.2f}, Pass={self.success})."
         )
         return self.score
 
@@ -201,7 +216,9 @@ class DeterministicTrajectoryHeuristic(BaseMetric):
         return self.measure(test_case)
 
     def is_successful(self) -> bool:
-        return self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        return bool(self.score is not None and self.score >= threshold_val)
+
 
 
 class PlanQualityMetric(BaseMetric):
@@ -243,14 +260,16 @@ class PlanQualityMetric(BaseMetric):
             self.score = 0.40
             self.reason = "Plan is underspecified or excessively brief."
 
-        self.success = self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        self.success = self.score >= threshold_val
         return self.score
 
     async def a_measure(self, test_case: LLMTestCase) -> float:
         return self.measure(test_case)
 
     def is_successful(self) -> bool:
-        return self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        return bool(self.score is not None and self.score >= threshold_val)
 
 
 class PlanAdherenceMetric(BaseMetric):
@@ -260,6 +279,7 @@ class PlanAdherenceMetric(BaseMetric):
     """
 
     def __init__(self, threshold: float = 0.75) -> None:
+        super().__init__()
         self.threshold = threshold
         self.score: float = 0.0
         self.reason: str = ""
@@ -282,7 +302,8 @@ class PlanAdherenceMetric(BaseMetric):
         matches = 0
         total = len(retrieval_context)
 
-        for step in retrieval_context:
+        for step_raw in retrieval_context:
+            step = _extract_text(step_raw)
             step_lower = step.lower()
             if step_lower in actual_output:
                 matches += 1
@@ -297,14 +318,16 @@ class PlanAdherenceMetric(BaseMetric):
 
         self.score = round(matches / total, 4) if total > 0 else 1.0
         self.reason = f"Executed {matches}/{total} planned trajectory steps."
-        self.success = self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        self.success = self.score >= threshold_val
         return self.score
 
     async def a_measure(self, test_case: LLMTestCase) -> float:
         return self.measure(test_case)
 
     def is_successful(self) -> bool:
-        return self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        return bool(self.score is not None and self.score >= threshold_val)
 
 
 class ToolCorrectnessMetric(BaseMetric):
@@ -318,6 +341,7 @@ class ToolCorrectnessMetric(BaseMetric):
         threshold: float = 0.80,
         allowed_tools: set[str] | None = None,
     ) -> None:
+        super().__init__()
         self.threshold = threshold
         self.allowed_tools = allowed_tools or DEFAULT_ALLOWED_TOOLS
         self.score: float = 0.0
@@ -333,10 +357,11 @@ class ToolCorrectnessMetric(BaseMetric):
         output_lower = (test_case.actual_output or "").lower()
 
         # Check for known dangerous or hallucinated tools
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.80
         if any(inv in output_lower for inv in KNOWN_INVALID_TOOLS):
             self.score = 0.20
             self.reason = "Detected invalid or disallowed tool invocation."
-            self.success = self.score >= self.threshold
+            self.success = self.score >= threshold_val
             return self.score
 
         if tools_called:
@@ -349,14 +374,15 @@ class ToolCorrectnessMetric(BaseMetric):
             self.score = 0.85
             self.reason = "Direct generation without external tool call."
 
-        self.success = self.score >= self.threshold
+        self.success = self.score >= threshold_val
         return self.score
 
     async def a_measure(self, test_case: LLMTestCase) -> float:
         return self.measure(test_case)
 
     def is_successful(self) -> bool:
-        return self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.80
+        return bool(self.score is not None and self.score >= threshold_val)
 
 
 class TaskCompletionMetric(BaseMetric):
@@ -366,6 +392,7 @@ class TaskCompletionMetric(BaseMetric):
     """
 
     def __init__(self, threshold: float = 0.75) -> None:
+        super().__init__()
         self.threshold = threshold
         self.score: float = 0.0
         self.reason: str = ""
@@ -377,6 +404,7 @@ class TaskCompletionMetric(BaseMetric):
 
     def measure(self, test_case: LLMTestCase) -> float:
         output = (test_case.actual_output or "").strip()
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
         if not output:
             self.score = 0.0
             self.reason = "Task incomplete: No output produced."
@@ -387,14 +415,15 @@ class TaskCompletionMetric(BaseMetric):
             self.score = 0.90
             self.reason = "Task completed with valid output."
 
-        self.success = self.score >= self.threshold
+        self.success = self.score >= threshold_val
         return self.score
 
     async def a_measure(self, test_case: LLMTestCase) -> float:
         return self.measure(test_case)
 
     def is_successful(self) -> bool:
-        return self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        return bool(self.score is not None and self.score >= threshold_val)
 
 
 def create_real_geval_trajectory_judge(
@@ -443,8 +472,9 @@ class RealGEvalTrajectoryJudge(BaseMetric):
     """
 
     def __init__(self, threshold: float = 0.75, model: str = "gpt-4o-mini") -> None:
+        super().__init__()
         self.threshold = threshold
-        self.model = model
+        self.model: Any = model
         self._judge: Any | None = None
         self.score: float = 0.0
         self.reason: str = ""
@@ -457,23 +487,29 @@ class RealGEvalTrajectoryJudge(BaseMetric):
     @property
     def judge(self) -> Any:
         if self._judge is None:
+            threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+            model_val = str(self.model) if self.model is not None else "gpt-4o-mini"
             self._judge = create_real_geval_trajectory_judge(
-                threshold=self.threshold,
-                model=self.model,
+                threshold=threshold_val,
+                model=model_val,
             )
         return self._judge
 
     def measure(self, test_case: LLMTestCase) -> float:
-        self.score = self.judge.measure(test_case)
+        self.score = float(self.judge.measure(test_case))
         self.reason = getattr(self.judge, "reason", "") or ""
-        self.success = self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        self.success = self.score >= threshold_val
         return self.score
 
     async def a_measure(self, test_case: LLMTestCase) -> float:
-        self.score = await self.judge.a_measure(test_case)
+        self.score = float(await self.judge.a_measure(test_case))
         self.reason = getattr(self.judge, "reason", "") or ""
-        self.success = self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        self.success = self.score >= threshold_val
         return self.score
 
     def is_successful(self) -> bool:
-        return self.score >= self.threshold
+        threshold_val = float(self.threshold) if self.threshold is not None else 0.75
+        return bool(self.score is not None and self.score >= threshold_val)
+

@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from deepeval import assert_test
+from deepeval import assert_test  # type: ignore[attr-defined]
 from deepeval.test_case import LLMTestCase
 
 from evals.metrics.trajectory_metrics import (
@@ -206,6 +206,63 @@ async def test_agent_loop_real_trajectory_evaluation():
     assert score >= 0.75, f"Expected real AgentLoop trajectory to score >= 0.75, got {score}: {gate.reason}"
     assert gate.is_successful() is True
     assert_test(test_case=test_case, metrics=[gate])
+
+
+@pytest.mark.asyncio
+async def test_trajectory_with_duckdb_and_describe_table_tools():
+    """Verify trajectory evaluation recognizes duckdb_query and describe_table as allowed tools."""
+    test_case = LLMTestCase(
+        input="Describe schema for orders_table and run aggregation in DuckDB.",
+        actual_output=(
+            "Step 1: Inspect table schema using describe_table on target 'orders_table'.\n"
+            "Step 2: Execute local analytical aggregation via duckdb_query: "
+            "SELECT status, count(*) AS cnt FROM orders_table GROUP BY status;\n"
+            "Step 3: Verify execution metrics and deliver structured result."
+        ),
+        retrieval_context=[
+            "Step 1: Check table schema with describe_table.",
+            "Step 2: Aggregate orders by status with duckdb_query.",
+            "Step 3: Format summary results.",
+        ],
+    )
+
+    tool_metric = ToolCorrectnessMetric(threshold=0.80)
+    score = tool_metric.measure(test_case)
+    assert score >= 0.80, f"Expected ToolCorrectnessMetric >= 0.80, got {score}: {tool_metric.reason}"
+
+    gate = DeterministicTrajectoryHeuristic(threshold=0.75)
+    gate_score = gate.measure(test_case)
+    assert gate_score >= 0.75, f"Expected gate >= 0.75, got {gate_score}: {gate.reason}"
+    assert gate.details["tools"] >= 0.95
+    assert_test(test_case=test_case, metrics=[tool_metric, gate])
+
+
+@pytest.mark.asyncio
+async def test_trajectory_with_retrieval_search_tool():
+    """Verify trajectory evaluation recognizes retrieval_search as an allowed tool."""
+    test_case = LLMTestCase(
+        input="Search knowledge base for partition pruning guidelines.",
+        actual_output=(
+            "Step 1: Execute retrieval_search tool with query 'partition pruning best practices' and top_k=5.\n"
+            "Step 2: Parse retrieved documents and summarize partition key constraints.\n"
+            "Step 3: Format response recommendations."
+        ),
+        retrieval_context=[
+            "Step 1: Search knowledge base via retrieval_search.",
+            "Step 2: Parse retrieved results.",
+            "Step 3: Deliver recommendations.",
+        ],
+    )
+
+    tool_metric = ToolCorrectnessMetric(threshold=0.80)
+    score = tool_metric.measure(test_case)
+    assert score >= 0.80, f"Expected ToolCorrectnessMetric >= 0.80, got {score}: {tool_metric.reason}"
+
+    gate = DeterministicTrajectoryHeuristic(threshold=0.75)
+    gate_score = gate.measure(test_case)
+    assert gate_score >= 0.75, f"Expected gate >= 0.75, got {gate_score}: {gate.reason}"
+    assert gate.details["tools"] >= 0.95
+    assert_test(test_case=test_case, metrics=[tool_metric, gate])
 
 
 @pytest.mark.heavy

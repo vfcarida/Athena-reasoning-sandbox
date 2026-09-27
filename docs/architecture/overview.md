@@ -99,7 +99,7 @@ When an agent proposes an analytical query that fails FinOps governance, the `Au
 ## 4. Model Context Protocol (MCP) Integration
 
 Athena includes a native **Model Context Protocol (MCP)** server adapter (`AthenaMCPServer`) compliant with JSON-RPC 2.0:
-- Exposes registered tools (`duckdb_query`, `athena_query`, `retrieval_search`, `sandbox_execute`, `ping`, `echo`) with JSON Schema reflection.
+- Exposes registered tools (`duckdb_query`, `athena_query`, `describe_table`, `retrieval_search`, `sandbox_execute`, `ping`, `echo`) with JSON Schema reflection.
 - Operates over stdio via `athena-agent --mcp`, allowing instant connectivity from IDEs and external agents (Claude Desktop, Cursor, LangChain).
 - Respects the Executive deny-by-default authorization allowlist, ensuring external callers cannot invoke unauthorized system actions.
 
@@ -111,3 +111,17 @@ Agent loops that encounter transient network failures or retries risk re-executi
 - **State Snapshotting**: Captures conversation history, tool memory, and turn sequences in JSON.
 - **Deterministic Keying**: Uses `compute_idempotency_key(action_type, tool_name, tool_args)` via SHA-256 to record side effects.
 - **Replay Protection**: When re-running plans, previously recorded side effects are retrieved from the effect ledger rather than re-dispatched.
+
+---
+
+## 6. Dual-Lane Evaluation Gate & Trajectory Metrics
+
+To ensure robust evaluation in CI without incurring unexpected API bills or network flakiness, Athena provides a strict **Dual-Lane Evaluation Framework**:
+- **Lane 1 (Offline Deterministic Heuristics)**:
+  - `DeterministicTrajectoryHeuristic`: Rule- and keyword-based composite scoring of plan structure, tool correctness across the 7 authorized tools, plan adherence, and task completion.
+  - `DeterministicRAGGate`: Rule-based evaluation of context relevancy, rank-weighted context precision (MAP / Precision@k), and grounded output faithfulness.
+  - Executes 100% offline in CI without requiring API keys or GPU compute.
+- **Lane 2 (Neural LLM-as-a-Judge)**:
+  - `RealGEvalTrajectoryJudge`: DeepEval GEval evaluator using real neural LLMs (e.g. `gpt-4o-mini`) for holistic trajectory evaluation.
+  - Gated behind `@pytest.mark.heavy` and explicit `OPENAI_API_KEY` verification.
+

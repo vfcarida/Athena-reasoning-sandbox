@@ -334,3 +334,48 @@ class TestRetrievalSearchMetadataFiltering:
         assert len(hits) == 1
         assert hits[0]["doc_id"] == "doc2"
 
+
+# ---------------------------------------------------------------------------
+# ENG-01-K: Faithfulness evaluation tests
+# ---------------------------------------------------------------------------
+
+class TestEng01FaithfulnessEvaluation:
+    """Verify HybridSearchEngine.evaluate_faithfulness operates deterministically offline."""
+
+    def test_evaluate_faithfulness_passing(self) -> None:
+        from src.rag.hybrid_search import HybridSearchEngine
+
+        query = "What is AWS Athena pricing model?"
+        output = "AWS Athena charges 5 dollars per TB of data scanned from Amazon S3."
+        contexts = [
+            "AWS Athena charges 5 dollars per TB of data scanned from Amazon S3.",
+            "Partition pruning reduces scanned bytes in Athena queries.",
+        ]
+
+        score = HybridSearchEngine.evaluate_faithfulness(
+            query=query,
+            actual_output=output,
+            retrieved_contexts=contexts,
+            threshold=0.70,
+            deterministic=True,
+        )
+        assert score >= 0.70
+
+    def test_evaluate_faithfulness_failing_on_hallucination(self) -> None:
+        from src.rag.hybrid_search import HybridSearchEngine
+
+        query = "What is AWS Athena pricing model?"
+        output = "Athena costs 999 dollars per GPU hour running quantum supercomputers."
+        contexts = [
+            "AWS Athena charges 5 dollars per TB of data scanned from Amazon S3.",
+        ]
+
+        score = HybridSearchEngine.evaluate_faithfulness(
+            query=query,
+            actual_output=output,
+            retrieved_contexts=contexts,
+            threshold=0.70,
+            deterministic=True,
+        )
+        assert score < 0.50
+
