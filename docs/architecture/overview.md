@@ -125,3 +125,25 @@ To ensure robust evaluation in CI without incurring unexpected API bills or netw
   - `RealGEvalTrajectoryJudge`: DeepEval GEval evaluator using real neural LLMs (e.g. `gpt-4o-mini`) for holistic trajectory evaluation.
   - Gated behind `@pytest.mark.heavy` and explicit `OPENAI_API_KEY` verification.
 
+---
+
+## 7. OpenTelemetry Distributed Tracing & GenAI Semantic Conventions
+
+Athena instruments the entire reasoning, reflection, and execution hierarchy with OpenTelemetry spans adhering to OpenTelemetry GenAI Semantic Conventions (v1.28+):
+
+```mermaid
+graph TD
+    A["agent.run.autonomous_data_agent"] --> B["agent.plan_execution.<plan_id>"]
+    B --> C["agent.step.1"]
+    C --> D["tool.execution.duckdb_query"]
+    A -.->|On FinOps Rejection| E["agent.discover_schema"]
+    E --> F["tool.execution.describe_table"]
+    A -.->|AST Self-Correction| G["agent.reflection"]
+```
+
+- **Root Agent Span (`agent.run.autonomous_data_agent`)**: Tracks `gen_ai.agent.name`, `gen_ai.agent.goal`, `gen_ai.agent.backend`, turns taken, reflection count, and final executed SQL.
+- **Plan & Step Spans (`agent.plan_execution`, `agent.step.<N>`)**: Captures cognitive plan ID, step rationale, action type, and idempotency cache hit status (`gen_ai.step.replayed`).
+- **Cognitive Reflection Spans (`agent.reflection`, `agent.discover_schema`)**: Tracks AST self-correction reasoning, rejected error message, and dynamic table schema discovery.
+- **Tool Spans (`tool.execution.<tool_name>`)**: Captures tool parameters, duration, timeout limits, and failure statuses (`unregistered`, `unauthorized`, `timeout`, `error`).
+- **In-Memory & Production Tracing**: Seamlessly switches between `InMemorySpanExporter` for testing and OpenTelemetry OTLP exporters in production.
+

@@ -26,7 +26,9 @@ from typing import Any
 
 import pytest
 
+from src.athena.duckdb_client import DuckDBClient
 from src.engine.agent_loop import AgentLoop, AgentPlanner
+from src.engine.data_agent import AutonomousDataAgent
 from src.engine.dispatcher import ParallaxToolDispatcher
 from src.engine.executor import ExecutiveEngineProcess
 from src.reasoning.schemas import ActionType, ReasoningStep, ToolCallPayload
@@ -55,6 +57,13 @@ class TestGenAISpanAttributes:
         assert GenAISpanAttributes.GEN_AI_SYSTEM == "gen_ai.system"
         assert GenAISpanAttributes.GEN_AI_OPERATION_NAME == "gen_ai.operation.name"
         assert GenAISpanAttributes.GEN_AI_AGENT_NAME == "gen_ai.agent.name"
+        assert GenAISpanAttributes.GEN_AI_AGENT_GOAL == "gen_ai.agent.goal"
+        assert GenAISpanAttributes.GEN_AI_AGENT_BACKEND == "gen_ai.agent.backend"
+        assert GenAISpanAttributes.GEN_AI_AGENT_MAX_TURNS == "gen_ai.agent.max_turns"
+        assert GenAISpanAttributes.GEN_AI_AGENT_TURNS_TAKEN == "gen_ai.agent.turns_taken"
+        assert GenAISpanAttributes.GEN_AI_AGENT_SUCCESS == "gen_ai.agent.success"
+        assert GenAISpanAttributes.GEN_AI_AGENT_FINAL_SQL == "gen_ai.agent.final_sql"
+        assert GenAISpanAttributes.GEN_AI_AGENT_REFLECTIONS_COUNT == "gen_ai.agent.reflections_count"
         assert GenAISpanAttributes.GEN_AI_PLAN_ID == "gen_ai.plan.id"
         assert GenAISpanAttributes.GEN_AI_PLAN_STEP_COUNT == "gen_ai.plan.step_count"
         assert GenAISpanAttributes.GEN_AI_PLAN_STATUS == "gen_ai.plan.status"
@@ -406,3 +415,137 @@ class TestAgentLoopSpans:
         step_attrs = dict(step_span.attributes)
         assert step_attrs[GenAISpanAttributes.GEN_AI_TOOL_STATUS] == "error"
         assert "Unauthorized tool execution" in step_attrs[GenAISpanAttributes.ERROR_MESSAGE]
+
+
+class TestAutonomousDataAgentTelemetry:
+    """Verify GenAI semantic convention spans for AutonomousDataAgent."""
+
+    @pytest.fixture
+    def test_duckdb(self) -> Any:
+        client = DuckDBClient(database=":memory:")
+        client.con.execute("""
+            CREATE TABLE sales (
+                order_id INTEGER,
+                amount DOUBLE,
+                dt VARCHAR
+            );
+            INSERT INTO sales VALUES (1, 100.0, '2026-09-01'), (2, 200.0, '2026-09-01');
+        """)
+        yield client
+        client.close()
+
+    @pytest.mark.asyncio
+    async def test_agent_zero_shot_telemetry(self, test_duckdb: DuckDBClient) -> None:
+        tracer_inst, exporter = AgentTelemetryTracer.create_in_memory_tracer("test-agent-telemetry")
+        agent = AutonomousDataAgent(
+            backend="duckdb",
+            duckdb_client=test_duckdb,
+            tracer=tracer_inst,
+        )
+
+        sql = "SELECT order_id, amount FROM sales WHERE dt = '2026-09-01' LIMIT 10;"
+        summary = await agent.run(
+            goal="Retrieve orders",
+            initial_sql=sql,
+            required_partition_keys=["dt"],
+        )
+        assert summary.success is True
+        assert summary.turns == 1
+
+        spans = exporter.get_finished_spans()
+        span_names = [s.name for s in spans]
+        assert "agent.run.autonomous_data_agent" in span_names
+        assert any(name.startswith("agent.plan_execution") for name in span_names)
+        assert "agent.step.1" in span_names
+        assert "tool.execution.duckdb_query" in span_names
+
+        root_span = next(s for s in spans if s.name == "agent.run.autonomous_data_agent")
+        attrs = dict(root_span.attributes)
+        assert attrs[GenAISpanAttributes.GEN_AI_SYSTEM] == "athena-reasoning-sandbox"
+        assert attrs[GenAISpanAttributes.GEN_AI_OPERATION_NAME] == "data_agent.run"
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_NAME] == "autonomous_data_agent"
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_GOAL] == "Retrieve orders"
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_BACKEND] == "duckdb"
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_MAX_TURNS] == 3
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_TURNS_TAKEN] == 1
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_SUCCESS] is True
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_FINAL_SQL] == sql
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_REFLECTIONS_COUNT] == 0
+        status_val = getattr(root_span.status, "status_code", root_span.status)
+        assert status_val == StatusCode.OK
+
+    @pytest.mark.asyncio
+    async def test_agent_reflection_cycle_telemetry(self, test_duckdb: DuckDBClient) -> None:
+        tracer_inst, exporter = AgentTelemetryTracer.create_in_memory_tracer("test-agent-reflection-telemetry")
+        agent = AutonomousDataAgent(
+            backend="duckdb",
+            duckdb_client=test_duckdb,
+            tracer=tracer_inst,
+        )
+
+        # Initial query omits partition filter, triggering AST guard failure and reflection
+        initial_sql = "SELECT order_id, amount FROM sales LIMIT 10;"
+        summary = await agent.run(
+            goal="Retrieve orders with reflection",
+            initial_sql=initial_sql,
+            required_partition_keys=["dt"],
+        )
+        assert summary.success is True
+        assert summary.turns == 2
+
+        spans = exporter.get_finished_spans()
+        span_names = [s.name for s in spans]
+        assert "agent.run.autonomous_data_agent" in span_names
+        assert "agent.reflection" in span_names
+        assert "agent.discover_schema" in span_names
+        assert "tool.execution.describe_table" in span_names
+
+        root_span = next(s for s in spans if s.name == "agent.run.autonomous_data_agent")
+        attrs = dict(root_span.attributes)
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_TURNS_TAKEN] == 2
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_SUCCESS] is True
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_REFLECTIONS_COUNT] == 1
+        assert "WHERE dt = '2026-09-01'" in attrs[GenAISpanAttributes.GEN_AI_AGENT_FINAL_SQL]
+        status_val = getattr(root_span.status, "status_code", root_span.status)
+        assert status_val == StatusCode.OK
+
+        # Check reflection span
+        ref_span = next(s for s in spans if s.name == "agent.reflection")
+        ref_attrs = dict(ref_span.attributes)
+        assert "error.message" in ref_attrs
+        assert "WHERE dt = '2026-09-01'" in ref_attrs["refined_sql"]
+
+        # Check schema discovery span
+        schema_span = next(s for s in spans if s.name == "agent.discover_schema")
+        schema_attrs = dict(schema_span.attributes)
+        assert schema_attrs["table.name"] == "sales"
+        assert schema_attrs["schema.columns_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_agent_exhaustion_telemetry(self, test_duckdb: DuckDBClient) -> None:
+        tracer_inst, exporter = AgentTelemetryTracer.create_in_memory_tracer("test-agent-exhaustion-telemetry")
+        agent = AutonomousDataAgent(
+            backend="duckdb",
+            duckdb_client=test_duckdb,
+            max_reflection_turns=1,
+            tracer=tracer_inst,
+        )
+
+        initial_sql = "SELECT order_id, amount FROM sales LIMIT 10;"  # Missing partition key
+        summary = await agent.run(
+            goal="Query will fail due to 1 max turn limit",
+            initial_sql=initial_sql,
+            required_partition_keys=["dt"],
+        )
+        assert summary.success is False
+        assert summary.turns == 1
+
+        spans = exporter.get_finished_spans()
+        root_span = next(s for s in spans if s.name == "agent.run.autonomous_data_agent")
+        attrs = dict(root_span.attributes)
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_TURNS_TAKEN] == 1
+        assert attrs[GenAISpanAttributes.GEN_AI_AGENT_SUCCESS] is False
+        assert attrs[GenAISpanAttributes.ERROR_TYPE] == "ReflectionExhaustedError"
+        assert "partition" in attrs[GenAISpanAttributes.ERROR_MESSAGE].lower()
+        status_val = getattr(root_span.status, "status_code", root_span.status)
+        assert status_val == StatusCode.ERROR

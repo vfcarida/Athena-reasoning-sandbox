@@ -32,6 +32,17 @@ from src.state.checkpoint_manager import (
     ConversationCheckpointManager,
     ConversationStateCheckpoint,
 )
+from src.telemetry import (
+    AgentTelemetryTracer,
+    GenAISpanAttributes,
+    StatusCode,
+    record_span_exception,
+    set_span_attribute,
+    set_span_status,
+)
+from src.telemetry import (
+    tracer as global_tracer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +93,7 @@ class AutonomousDataAgent:
         athena_client: AthenaClient | None = None,
         checkpoint_manager: ConversationCheckpointManager | None = None,
         max_reflection_turns: int = 3,
+        tracer: AgentTelemetryTracer | None = None,
     ) -> None:
         """Initialize the autonomous data agent.
 
@@ -91,21 +103,24 @@ class AutonomousDataAgent:
             athena_client: Optional custom AthenaClient instance.
             checkpoint_manager: Optional conversation checkpoint manager for state persistence.
             max_reflection_turns: Maximum allowed correction cycles upon query failure.
+            tracer: Optional custom AgentTelemetryTracer for distributed tracing.
         """
         self.backend = backend
         self.duckdb_client = duckdb_client or (DuckDBClient() if backend == "duckdb" else None)
         self.athena_client = athena_client or (AthenaClient() if backend == "athena" else None)
         self.checkpoint_manager = checkpoint_manager
         self.max_reflection_turns = max_reflection_turns
+        self.tracer = tracer or global_tracer
         self.planner = AgentPlanner()
 
-        # Wire executive engine and Parallax dispatcher
+        # Wire executive engine and Parallax dispatcher with tracer
         self.executor = ExecutiveEngineProcess(
             athena_client=self.athena_client,
             duckdb_client=self.duckdb_client,
+            tracer=self.tracer,
         )
         self.dispatcher = ParallaxToolDispatcher(executor=self.executor)
-        self.agent_loop = AgentLoop(dispatcher=self.dispatcher)
+        self.agent_loop = AgentLoop(dispatcher=self.dispatcher, tracer=self.tracer)
 
     async def discover_schema(self, table_name: str) -> list[dict[str, Any]]:
         """Autonomously discover table column definitions through the executive boundary.
@@ -116,27 +131,39 @@ class AutonomousDataAgent:
         Returns:
             List of column descriptor dictionaries with column_name and column_type.
         """
-        payload = ToolCallPayload(
-            call_id=f"schema-{uuid.uuid4()}",
-            tool_name="describe_table",
-            arguments={"table_name": table_name},
-            timeout_seconds=10.0,
-        )
-        obs = await self.dispatcher.dispatch_tool_call(payload)
-        if not obs.success or not obs.output_data:
-            logger.warning("Could not discover schema for table '%s': %s", table_name, obs.error_message)
-            return []
+        with self.tracer.start_span(
+            "agent.discover_schema",
+            {
+                GenAISpanAttributes.GEN_AI_SYSTEM: "athena-reasoning-sandbox",
+                GenAISpanAttributes.GEN_AI_AGENT_NAME: "autonomous_data_agent",
+                GenAISpanAttributes.GEN_AI_OPERATION_NAME: "discover_schema",
+                "table.name": table_name,
+            },
+        ) as schema_span:
+            payload = ToolCallPayload(
+                call_id=f"schema-{uuid.uuid4()}",
+                tool_name="describe_table",
+                arguments={"table_name": table_name},
+                timeout_seconds=10.0,
+            )
+            obs = await self.dispatcher.dispatch_tool_call(payload)
+            if not obs.success or not obs.output_data:
+                logger.warning("Could not discover schema for table '%s': %s", table_name, obs.error_message)
+                set_span_status(schema_span, StatusCode.ERROR, description=obs.error_message)
+                return []
 
-        rows = obs.output_data.get("rows", [])
-        columns: list[dict[str, Any]] = []
-        for r in rows:
-            if isinstance(r, (list, tuple)) and len(r) >= 2:
-                columns.append({"column_name": str(r[0]), "column_type": str(r[1])})
-            elif isinstance(r, dict):
-                col_name = str(r.get("column_name", r.get("Field", r.get("name", ""))))
-                col_type = str(r.get("column_type", r.get("Type", r.get("type", ""))))
-                columns.append({"column_name": col_name, "column_type": col_type})
-        return columns
+            rows = obs.output_data.get("rows", [])
+            columns: list[dict[str, Any]] = []
+            for r in rows:
+                if isinstance(r, (list, tuple)) and len(r) >= 2:
+                    columns.append({"column_name": str(r[0]), "column_type": str(r[1])})
+                elif isinstance(r, dict):
+                    col_name = str(r.get("column_name", r.get("Field", r.get("name", ""))))
+                    col_type = str(r.get("column_type", r.get("Type", r.get("type", ""))))
+                    columns.append({"column_name": col_name, "column_type": col_type})
+            set_span_attribute(schema_span, "schema.columns_count", len(columns))
+            set_span_status(schema_span, StatusCode.OK)
+            return columns
 
     def _reflect_and_refine_sql(
         self,
@@ -161,125 +188,136 @@ class AutonomousDataAgent:
         Returns:
             Tuple of (refined_sql, reasoning_reflection_thought).
         """
-        dialect = "duckdb" if self.backend == "duckdb" else "trino"
-        cleaned = original_sql.strip().rstrip(";").strip()
+        with self.tracer.start_span(
+            "agent.reflection",
+            {
+                GenAISpanAttributes.GEN_AI_SYSTEM: "athena-reasoning-sandbox",
+                GenAISpanAttributes.GEN_AI_AGENT_NAME: "autonomous_data_agent",
+                GenAISpanAttributes.GEN_AI_OPERATION_NAME: "reflect_and_refine_sql",
+                "error.message": error_message,
+            },
+        ) as ref_span:
+            dialect = "duckdb" if self.backend == "duckdb" else "trino"
+            cleaned = original_sql.strip().rstrip(";").strip()
 
-        ast: Any = None
-        try:
-            ast = sqlglot.parse_one(cleaned, read=dialect)
-        except Exception:
-            ast = None
+            ast: Any = None
+            try:
+                ast = sqlglot.parse_one(cleaned, read=dialect)
+            except Exception:
+                ast = None
 
-        discovered_columns: list[str] = []
-        discovered_partition_key: str = default_partition_key
+            discovered_columns: list[str] = []
+            discovered_partition_key: str = default_partition_key
 
-        if table_schema:
-            for col in table_schema:
-                col_name = str(col.get("column_name") or col.get("name") or "")
-                if col_name:
-                    discovered_columns.append(col_name)
-                if col.get("is_partition"):
-                    discovered_partition_key = col_name
+            if table_schema:
+                for col in table_schema:
+                    col_name = str(col.get("column_name") or col.get("name") or "")
+                    if col_name:
+                        discovered_columns.append(col_name)
+                    if col.get("is_partition"):
+                        discovered_partition_key = col_name
 
-        # 1. Reflection on missing partition filter
-        if "WHERE clause" in error_message or "partition filter" in error_message or "partition" in error_message.lower():
-            partition_key_to_use = discovered_partition_key or default_partition_key
-            thought = (
-                f"<think> Reflection: The query was rejected because it omits partition pruning "
-                f"on column '{partition_key_to_use}'. Scans on analytical data lakes require "
-                f"explicit partition bounding to avoid full table scans ($5/TB risk). "
-                f"Appending partition filter: WHERE {partition_key_to_use} = '{default_partition_val}'. </think>"
-            )
-            if ast is not None:
-                partition_pred = exp.EQ(
-                    this=exp.to_column(partition_key_to_use),
-                    expression=exp.Literal.string(default_partition_val),
+            # 1. Reflection on missing partition filter
+            if "WHERE clause" in error_message or "partition filter" in error_message or "partition" in error_message.lower():
+                partition_key_to_use = discovered_partition_key or default_partition_key
+                thought = (
+                    f"<think> Reflection: The query was rejected because it omits partition pruning "
+                    f"on column '{partition_key_to_use}'. Scans on analytical data lakes require "
+                    f"explicit partition bounding to avoid full table scans ($5/TB risk). "
+                    f"Appending partition filter: WHERE {partition_key_to_use} = '{default_partition_val}'. </think>"
                 )
-                ast = ast.where(partition_pred, append=True)
-                refined = ast.sql(dialect=dialect)
-            else:
-                if re.search(r"\bWHERE\b", cleaned, flags=re.IGNORECASE):
-                    refined = re.sub(
-                        r"\bWHERE\b",
-                        f"WHERE {partition_key_to_use} = '{default_partition_val}' AND",
-                        cleaned,
-                        count=1,
-                        flags=re.IGNORECASE,
+                if ast is not None:
+                    partition_pred = exp.EQ(
+                        this=exp.to_column(partition_key_to_use),
+                        expression=exp.Literal.string(default_partition_val),
                     )
+                    ast = ast.where(partition_pred, append=True)
+                    refined = ast.sql(dialect=dialect)
                 else:
-                    refined = f"{cleaned} WHERE {partition_key_to_use} = '{default_partition_val}'"
-
-        # 2. Reflection on unbounded SELECT *
-        elif "Unbounded 'SELECT *" in error_message or "Unbounded projection" in error_message or "SELECT *" in error_message:
-            # Determine projection columns from discovered schema or fallback
-            if table_schema and all(c in discovered_columns for c in ["order_id", "amount"]):
-                projection_cols = ["order_id", "amount"]
-            elif table_schema and discovered_columns:
-                projection_cols = [c for c in discovered_columns if c != discovered_partition_key][:5]
-            else:
-                projection_cols = ["order_id", "amount"]
-
-            cols_str = ", ".join(projection_cols[:5])
-            thought = (
-                f"<think> Reflection: The query was rejected due to an unbounded 'SELECT *' projection. "
-                f"Columnar storage engines scan every column block in SELECT *. "
-                f"Restricting projection to explicit columns: '{cols_str}'. </think>"
-            )
-            if ast is not None:
-                # Replace Star nodes in select expressions
-                new_exprs = []
-                for expr in ast.expressions:
-                    is_star = isinstance(expr, exp.Star) or (
-                        isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star)
-                    )
-                    if is_star:
-                        new_exprs.extend([exp.to_column(col) for col in projection_cols[:5]])
+                    if re.search(r"\bWHERE\b", cleaned, flags=re.IGNORECASE):
+                        refined = re.sub(
+                            r"\bWHERE\b",
+                            f"WHERE {partition_key_to_use} = '{default_partition_val}' AND",
+                            cleaned,
+                            count=1,
+                            flags=re.IGNORECASE,
+                        )
                     else:
-                        new_exprs.append(expr)
-                if not new_exprs:
-                    new_exprs = [exp.to_column(col) for col in projection_cols[:5]]
-                ast.set("expressions", new_exprs)
-                refined = ast.sql(dialect=dialect)
-            else:
-                refined = re.sub(r"SELECT\s+\*", f"SELECT {cols_str}", cleaned, count=1, flags=re.IGNORECASE)
+                        refined = f"{cleaned} WHERE {partition_key_to_use} = '{default_partition_val}'"
 
-        # 3. Reflection on budget / cost exceeded
-        elif "cost exceeded" in error_message.lower() or "budget" in error_message.lower():
-            thought = (
-                "<think> Reflection: Query projected cost exceeds FinOps budget limit. "
-                "Applying tighter partition constraint and appending LIMIT 50 to bound scan. </think>"
-            )
-            if ast is not None:
-                ast = ast.limit(50)
-                refined = ast.sql(dialect=dialect)
-            else:
-                refined = f"{cleaned} LIMIT 50"
-
-        # 4. Reflection on missing LIMIT
-        elif "LIMIT" in error_message:
-            thought = (
-                "<think> Reflection: Query lacks an explicit LIMIT clause. "
-                "Appending 'LIMIT 100' to bound client result buffer. </think>"
-            )
-            if ast is not None:
-                ast = ast.limit(100)
-                refined = ast.sql(dialect=dialect)
-            else:
-                refined = f"{cleaned} LIMIT 100"
-
-        else:
-            thought = f"<think> Reflection: Query failed with error '{error_message}'. Applying default hygiene: adding LIMIT 100. </think>"
-            if ast is not None:
-                if ast.find(exp.Limit) is None:
-                    ast = ast.limit(100)
-                refined = ast.sql(dialect=dialect)
-            else:
-                if not re.search(r"\bLIMIT\b", cleaned, flags=re.IGNORECASE):
-                    refined = f"{cleaned} LIMIT 100"
+            # 2. Reflection on unbounded SELECT *
+            elif "Unbounded 'SELECT *" in error_message or "Unbounded projection" in error_message or "SELECT *" in error_message:
+                # Determine projection columns from discovered schema or fallback
+                if table_schema and all(c in discovered_columns for c in ["order_id", "amount"]):
+                    projection_cols = ["order_id", "amount"]
+                elif table_schema and discovered_columns:
+                    projection_cols = [c for c in discovered_columns if c != discovered_partition_key][:5]
                 else:
-                    refined = cleaned
+                    projection_cols = ["order_id", "amount"]
 
-        return refined, thought
+                cols_str = ", ".join(projection_cols[:5])
+                thought = (
+                    f"<think> Reflection: The query was rejected due to an unbounded 'SELECT *' projection. "
+                    f"Columnar storage engines scan every column block in SELECT *. "
+                    f"Restricting projection to explicit columns: '{cols_str}'. </think>"
+                )
+                if ast is not None:
+                    # Replace Star nodes in select expressions
+                    new_exprs = []
+                    for expr in ast.expressions:
+                        is_star = isinstance(expr, exp.Star) or (
+                            isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star)
+                        )
+                        if is_star:
+                            new_exprs.extend([exp.to_column(col) for col in projection_cols[:5]])
+                        else:
+                            new_exprs.append(expr)
+                    if not new_exprs:
+                        new_exprs = [exp.to_column(col) for col in projection_cols[:5]]
+                    ast.set("expressions", new_exprs)
+                    refined = ast.sql(dialect=dialect)
+                else:
+                    refined = re.sub(r"SELECT\s+\*", f"SELECT {cols_str}", cleaned, count=1, flags=re.IGNORECASE)
+
+            # 3. Reflection on budget / cost exceeded
+            elif "cost exceeded" in error_message.lower() or "budget" in error_message.lower():
+                thought = (
+                    "<think> Reflection: Query projected cost exceeds FinOps budget limit. "
+                    "Applying tighter partition constraint and appending LIMIT 50 to bound scan. </think>"
+                )
+                if ast is not None:
+                    ast = ast.limit(50)
+                    refined = ast.sql(dialect=dialect)
+                else:
+                    refined = f"{cleaned} LIMIT 50"
+
+            # 4. Reflection on missing LIMIT
+            elif "LIMIT" in error_message:
+                thought = (
+                    "<think> Reflection: Query lacks an explicit LIMIT clause. "
+                    "Appending 'LIMIT 100' to bound client result buffer. </think>"
+                )
+                if ast is not None:
+                    ast = ast.limit(100)
+                    refined = ast.sql(dialect=dialect)
+                else:
+                    refined = f"{cleaned} LIMIT 100"
+
+            else:
+                thought = f"<think> Reflection: Query failed with error '{error_message}'. Applying default hygiene: adding LIMIT 100. </think>"
+                if ast is not None:
+                    if ast.find(exp.Limit) is None:
+                        ast = ast.limit(100)
+                    refined = ast.sql(dialect=dialect)
+                else:
+                    if not re.search(r"\bLIMIT\b", cleaned, flags=re.IGNORECASE):
+                        refined = f"{cleaned} LIMIT 100"
+                    else:
+                        refined = cleaned
+
+            set_span_attribute(ref_span, "refined_sql", refined)
+            set_span_status(ref_span, StatusCode.OK)
+            return refined, thought
 
     async def run(
         self,
@@ -308,94 +346,123 @@ class AutonomousDataAgent:
         last_error: str | None = None
         final_output: dict[str, Any] = {}
 
-        for turn in range(1, self.max_reflection_turns + 1):
-            logger.info("Data Agent execution turn %d/%d (SQL: %s)", turn, self.max_reflection_turns, current_sql[:60])
+        root_attributes = {
+            GenAISpanAttributes.GEN_AI_SYSTEM: "athena-reasoning-sandbox",
+            GenAISpanAttributes.GEN_AI_OPERATION_NAME: "data_agent.run",
+            GenAISpanAttributes.GEN_AI_AGENT_NAME: "autonomous_data_agent",
+            GenAISpanAttributes.GEN_AI_AGENT_GOAL: goal,
+            GenAISpanAttributes.GEN_AI_AGENT_BACKEND: self.backend,
+            GenAISpanAttributes.GEN_AI_AGENT_MAX_TURNS: self.max_reflection_turns,
+        }
 
-            # Build single-step query plan
-            step = ReasoningStep(
-                step_number=1,
-                rationale=f"Execute query on {self.backend} data lake backend.",
-                action_type=action_type,
-                tool_name=tool_name,
-                tool_args={
-                    "sql": current_sql,
-                    "required_partition_keys": required_partition_keys,
-                    "enforce_limit": True,
-                },
-            )
-            plan = self.planner.create_plan(
-                task_goal=goal,
-                steps=[step],
-                plan_id=str(uuid.uuid4()),
-                thinking_process=thinking_log[-1],
-                estimated_complexity=2,
-            )
+        with self.tracer.start_span("agent.run.autonomous_data_agent", root_attributes) as root_span:
+            try:
+                for turn in range(1, self.max_reflection_turns + 1):
+                    logger.info("Data Agent execution turn %d/%d (SQL: %s)", turn, self.max_reflection_turns, current_sql[:60])
 
-            # Execute plan across Parallax boundary
-            checkpoint = (
-                ConversationStateCheckpoint(checkpoint_id=str(uuid.uuid4()), step_index=0)
-                if self.checkpoint_manager
-                else None
-            )
-            loop_result = await self.agent_loop.run_plan(
-                plan=plan,
-                checkpoint=checkpoint,
-                checkpoint_manager=self.checkpoint_manager,
-            )
+                    # Build single-step query plan
+                    step = ReasoningStep(
+                        step_number=1,
+                        rationale=f"Execute query on {self.backend} data lake backend.",
+                        action_type=action_type,
+                        tool_name=tool_name,
+                        tool_args={
+                            "sql": current_sql,
+                            "required_partition_keys": required_partition_keys,
+                            "enforce_limit": True,
+                        },
+                    )
+                    plan = self.planner.create_plan(
+                        task_goal=goal,
+                        steps=[step],
+                        plan_id=str(uuid.uuid4()),
+                        thinking_process=thinking_log[-1],
+                        estimated_complexity=2,
+                    )
 
-            if loop_result.success:
+                    # Execute plan across Parallax boundary
+                    checkpoint = (
+                        ConversationStateCheckpoint(checkpoint_id=str(uuid.uuid4()), step_index=0)
+                        if self.checkpoint_manager
+                        else None
+                    )
+                    loop_result = await self.agent_loop.run_plan(
+                        plan=plan,
+                        checkpoint=checkpoint,
+                        checkpoint_manager=self.checkpoint_manager,
+                    )
+
+                    if loop_result.success:
+                        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+                        final_output = loop_result.final_output or {}
+                        thinking_log.append(f"<think> Success: Query executed successfully on turn {turn}. </think>")
+                        set_span_attribute(root_span, GenAISpanAttributes.GEN_AI_AGENT_TURNS_TAKEN, turn)
+                        set_span_attribute(root_span, GenAISpanAttributes.GEN_AI_AGENT_SUCCESS, True)
+                        set_span_attribute(root_span, GenAISpanAttributes.GEN_AI_AGENT_FINAL_SQL, current_sql)
+                        set_span_attribute(root_span, GenAISpanAttributes.GEN_AI_AGENT_REFLECTIONS_COUNT, turn - 1)
+                        set_span_status(root_span, StatusCode.OK)
+                        return DataAgentExecutionSummary(
+                            goal=goal,
+                            success=True,
+                            turns=turn,
+                            thinking_log=thinking_log,
+                            final_sql=current_sql,
+                            result_data=final_output,
+                            error=None,
+                            total_time_ms=elapsed_ms,
+                        )
+
+                    # Query failed (e.g. FinOps AST rejection)
+                    last_error = loop_result.error or "Unknown execution error"
+                    logger.warning("Turn %d failed with error: %s", turn, last_error)
+
+                    if turn < self.max_reflection_turns:
+                        # Pre-discover schema if AST identifies a target table
+                        table_schema: list[dict[str, Any]] | None = None
+                        try:
+                            dialect = "duckdb" if self.backend == "duckdb" else "trino"
+                            parsed_ast = sqlglot.parse_one(current_sql, read=dialect)
+                            tbl_node = parsed_ast.find(exp.Table) if parsed_ast else None
+                            if tbl_node and tbl_node.name:
+                                table_schema = await self.discover_schema(tbl_node.name)
+                        except Exception:
+                            table_schema = None
+
+                        # Enter reflection mode and refine query
+                        refined_sql, reflection_thought = self._reflect_and_refine_sql(
+                            original_sql=current_sql,
+                            error_message=last_error,
+                            default_partition_key=(required_partition_keys[0] if required_partition_keys else "dt"),
+                            table_schema=table_schema,
+                        )
+                        thinking_log.append(reflection_thought)
+                        current_sql = refined_sql
+
+                # All reflection turns exhausted
                 elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-                final_output = loop_result.final_output or {}
-                thinking_log.append(f"<think> Success: Query executed successfully on turn {turn}. </think>")
+                set_span_attribute(root_span, GenAISpanAttributes.GEN_AI_AGENT_TURNS_TAKEN, self.max_reflection_turns)
+                set_span_attribute(root_span, GenAISpanAttributes.GEN_AI_AGENT_SUCCESS, False)
+                set_span_attribute(root_span, GenAISpanAttributes.GEN_AI_AGENT_FINAL_SQL, current_sql)
+                set_span_attribute(root_span, GenAISpanAttributes.GEN_AI_AGENT_REFLECTIONS_COUNT, self.max_reflection_turns - 1)
+                set_span_attribute(root_span, GenAISpanAttributes.ERROR_TYPE, "ReflectionExhaustedError")
+                set_span_attribute(root_span, GenAISpanAttributes.ERROR_MESSAGE, last_error or "Max reflection turns exhausted")
+                set_span_status(root_span, StatusCode.ERROR, description=last_error)
                 return DataAgentExecutionSummary(
                     goal=goal,
-                    success=True,
-                    turns=turn,
+                    success=False,
+                    turns=self.max_reflection_turns,
                     thinking_log=thinking_log,
                     final_sql=current_sql,
-                    result_data=final_output,
-                    error=None,
+                    result_data={},
+                    error=last_error,
                     total_time_ms=elapsed_ms,
                 )
-
-            # Query failed (e.g. FinOps AST rejection)
-            last_error = loop_result.error or "Unknown execution error"
-            logger.warning("Turn %d failed with error: %s", turn, last_error)
-
-            if turn < self.max_reflection_turns:
-                # Pre-discover schema if AST identifies a target table
-                table_schema: list[dict[str, Any]] | None = None
-                try:
-                    dialect = "duckdb" if self.backend == "duckdb" else "trino"
-                    parsed_ast = sqlglot.parse_one(current_sql, read=dialect)
-                    tbl_node = parsed_ast.find(exp.Table) if parsed_ast else None
-                    if tbl_node and tbl_node.name:
-                        table_schema = await self.discover_schema(tbl_node.name)
-                except Exception:
-                    table_schema = None
-
-                # Enter reflection mode and refine query
-                refined_sql, reflection_thought = self._reflect_and_refine_sql(
-                    original_sql=current_sql,
-                    error_message=last_error,
-                    default_partition_key=(required_partition_keys[0] if required_partition_keys else "dt"),
-                    table_schema=table_schema,
-                )
-                thinking_log.append(reflection_thought)
-                current_sql = refined_sql
-
-        # All reflection turns exhausted
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-        return DataAgentExecutionSummary(
-            goal=goal,
-            success=False,
-            turns=self.max_reflection_turns,
-            thinking_log=thinking_log,
-            final_sql=current_sql,
-            result_data={},
-            error=last_error,
-            total_time_ms=elapsed_ms,
-        )
+            except Exception as exc:
+                record_span_exception(root_span, exc)
+                set_span_attribute(root_span, GenAISpanAttributes.ERROR_TYPE, type(exc).__name__)
+                set_span_attribute(root_span, GenAISpanAttributes.ERROR_MESSAGE, str(exc))
+                set_span_status(root_span, StatusCode.ERROR, description=str(exc))
+                raise
 
 
 __all__ = ["AutonomousDataAgent", "DataAgentExecutionSummary"]

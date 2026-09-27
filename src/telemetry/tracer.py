@@ -50,6 +50,15 @@ class GenAISpanAttributes:
     GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
     GEN_AI_AGENT_NAME = "gen_ai.agent.name"
 
+    # Agent session attributes
+    GEN_AI_AGENT_GOAL = "gen_ai.agent.goal"
+    GEN_AI_AGENT_BACKEND = "gen_ai.agent.backend"
+    GEN_AI_AGENT_MAX_TURNS = "gen_ai.agent.max_turns"
+    GEN_AI_AGENT_TURNS_TAKEN = "gen_ai.agent.turns_taken"
+    GEN_AI_AGENT_SUCCESS = "gen_ai.agent.success"
+    GEN_AI_AGENT_FINAL_SQL = "gen_ai.agent.final_sql"
+    GEN_AI_AGENT_REFLECTIONS_COUNT = "gen_ai.agent.reflections_count"
+
     # Plan-level attributes
     GEN_AI_PLAN_ID = "gen_ai.plan.id"
     GEN_AI_PLAN_STEP_COUNT = "gen_ai.plan.step_count"

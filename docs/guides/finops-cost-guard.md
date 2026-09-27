@@ -231,3 +231,14 @@ print(report["violations"])        # ["Missing mandatory partition filter...", "
 print(report["recommendations"])   # ["Add WHERE predicate on partition key...", "Specify explicit columns...", "Append LIMIT <N>..."]
 ```
 
+---
+
+## 📡 Distributed Telemetry & GenAI Span Observability
+
+All query generation, FinOps validation, schema discovery, and self-correcting reflections are automatically instrumented with OpenTelemetry GenAI semantic conventions:
+
+- `agent.run.autonomous_data_agent`: Captures goal, backend, turns taken, reflections count, and final SQL.
+- `agent.discover_schema`: Tracks schema introspection on tables before rewriting queries.
+- `agent.reflection`: Captures the error message that triggered reflection and the synthesized refined SQL.
+- `tool.execution.duckdb_query` / `tool.execution.athena_query`: Tracks exact execution time, scan stats, and query status.
+
